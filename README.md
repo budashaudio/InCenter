@@ -138,6 +138,23 @@ A few non-obvious decisions, in case you're reading the source:
   `ExecProcess` blocks the main thread until the worker exits. Batching
   keeps it as short as possible, but it isn't instant on long files.
 
+## Running the tests
+
+`tests/test_incenter.py` covers the Python DSP engine (`pytest`);
+`tests/lua/incenter_core_spec.lua` covers the shared Lua core against a
+fake `reaper` API (`busted`). These are developer-only checks, separate
+from the runtime requirements above.
+
+```
+python3 -m pip install pytest
+python3 -m pytest tests/
+
+brew install lua luarocks   # macOS; use your platform's package manager
+luarocks install busted
+eval "$(luarocks path)"
+busted tests/lua --lpath="tests/lua/?.lua"
+```
+
 ## Requirements
 
 - REAPER (developed on the portable macOS build, Apple Silicon)
