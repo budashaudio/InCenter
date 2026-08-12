@@ -1,0 +1,168 @@
+# InCenter
+
+A free, in-REAPER stereo re-centering tool for foley and field recordings
+that came off a portable recorder with the stereo image pulled to one
+side. It runs entirely inside your own REAPER session, at no cost.
+
+*by Budash Audio · v0.9.0 · MIT-licensed*
+
+## What it does
+
+- Estimates the stereo angle **per frequency band** (24 log-spaced bands)
+  and rotates each band back to center — fixes the frequency-dependent
+  tilt a plain L/R gain trim can't touch.
+- Estimates it **separately for the attack and the tail** of each sound
+  (onset detection on the energy envelope) and crossfades between the two
+  corrections, since a foley hit's transient and its room tail often sit
+  at different angles.
+- Optional **inter-channel delay alignment** (GCC-PHAT, sub-sample
+  precision) for spaced-mic (AB) recordings where part of the "wrong"
+  image is really a timing offset, not a level one. The delay is measured
+  on the loudest part of the file, so leading silence doesn't fool it.
+- Optional **stereo width reduction**, applied last and independently of
+  centering, with RMS-matched output level.
+- **Keeps your format and metadata.** Output bit depth and sample rate
+  match the input (16->16, 24->24, float->float), and BWF/bext timecode,
+  iXML and other chunks are carried across so the corrected file drops
+  back onto the timeline exactly where the original sat.
+
+## Files
+
+Everything installs together as one package:
+
+- `BudashAudio_InCenter.lua` — the control panel (sliders). **This is the
+  one to load.**
+- `BudashAudio_InCenter (batch, no GUI).lua` — a one-shot action that
+  processes the selection using settings hardcoded near the top of the
+  file. No window, handy for a toolbar button or keyboard shortcut.
+- `incenter_core.lua` — shared code used by both. Not an action; don't
+  load it directly.
+- `incenter.py` — the DSP engine. Not an action; runs as a subprocess.
+  Don't load it directly (see the warning below).
+
+## Install
+
+1. Install via ReaPack, or copy the whole folder anywhere inside your
+   REAPER `Scripts` folder. Subfolders are fine — each script locates
+   itself and its siblings automatically, no fixed path is baked in.
+2. In REAPER: Actions -> Show action list -> New action -> Load ReaScript...
+   and pick `BudashAudio_InCenter.lua` (and/or the batch action).
+3. The control panel needs the **ReaImGui** extension (Extensions ->
+   ReaPack -> Browse packages -> search "ReaImGui"). The batch action does
+   not.
+4. Requires a system **Python 3** with `numpy` and `scipy`. If you don't
+   already have these, follow **[INSTALL_Python.md](INSTALL_Python.md)** —
+   a plain, step-by-step guide (no Python knowledge needed) for macOS,
+   Windows and Linux. Both scripts then auto-detect the interpreter — they
+   actually try `import numpy, scipy` in each candidate, so they won't pick
+   a Python that's missing the libraries. If none of the usual locations
+   work, set `PYTHON_OVERRIDE` near the top of the batch script to your
+   interpreter's full path (see the guide).
+
+**Do not load `incenter.py` or `incenter_core.lua` as REAPER actions.**
+They're dependencies, not standalone scripts. `incenter.py` only runs
+correctly as a subprocess with CLI arguments; loading it directly runs it
+under REAPER's own embedded Python, which can't import numpy/scipy and may
+hang REAPER. Both carry an `@noindex` tag so ReaPack won't list them.
+
+## Use
+
+Select one or more stereo WAV items, open the InCenter panel (or run the
+batch action), and set:
+
+- **Attack / Tail strength** — how hard to pull each part back to center
+  (0-1). Tail 0 leaves the room/reverb tail where it is.
+- **Sound length** — leave on **Auto** to let it pick the analysis window
+  from the detected sound length, or force a size for unusual material.
+- **Align** — on for spaced mics (AB); off for coincident mics (XY/MS),
+  which have no timing offset to fix.
+- **Stereo width** — optional, narrows the image after centering.
+
+Press **Process selected item(s)**. Each item's take is repointed at a
+corrected file named `<name>_centered_<HHMMSS>.wav`, written to the
+project's media folder (or next to the source if the project isn't saved).
+The original source audio is never overwritten.
+
+## Why it's built the way it is
+
+A few non-obvious decisions, in case you're reading the source:
+
+- **DSP runs in a subprocess, not in REAPER's embedded Python.** REAPER's
+  built-in Python can't safely import numpy/scipy (they deadlock via
+  ctypes/libffi inside the embedded interpreter), so all processing shells
+  out to your system Python via `reaper.ExecProcess` with a small wrapper
+  script that captures the real exit code to a sidecar file.
+- **One `incenter.py` process per batch, not per file.** scipy's import
+  cost (~2 s, independent of file length) is the dominant fixed cost per
+  launch, so processing every unique source in a single `--batch` run
+  turns an Nx cost into a 1x. `ExecProcess` blocks REAPER's UI thread
+  while it waits — that's normal, not a hang; the panel shows
+  "Processing..." first so you can see it started.
+- **Own WAV reader/writer instead of scipy's.** scipy can't write 24-bit
+  and drops metadata chunks; parsing the RIFF container directly lets
+  input format == output format and preserves bext/iXML/cue/etc.
+- **The old take source is never destroyed after a swap.** Destroying a
+  `PCM_source` still shared between takes segfaults inside
+  `SetActiveTake`. Leaving it alone leaks a little memory per run, which
+  is the better trade.
+- **Peaks are rebuilt with the 3-phase `PCM_Source_BuildPeaks` protocol**
+  after every source swap — without it the waveform doesn't redraw.
+- **Shared logic lives in `incenter_core.lua`**, so a fix to the process
+  runner, the source-swap, or the Python finder happens once, not twice.
+
+## Known limitations
+
+- **Metadata:** standard chunks (bext, iXML, cue, LIST, junk) are carried
+  over; exotic vendor chunks should survive too, but only the common ones
+  are tested.
+- **Bit depth:** 16/24-bit int and 32/64-bit float are supported. A 24-bit
+  source that can't be decoded cleanly falls back to 32-bit float output.
+- **SECTION takes** (reversed or glued items) are skipped with a message —
+  glue to a plain file first if you need to process one.
+- **Item region:** the whole source file is processed, not just the item's
+  time selection. (Processing only the item region is planned.)
+- **Windows:** the macOS and Linux paths are the tested ones. Windows
+  support is implemented but **experimental** — please report back if you
+  run it there.
+
+## Troubleshooting
+
+- **Nothing happens / REAPER seems frozen:** first check you loaded
+  `BudashAudio_InCenter.lua` or the batch action, **not** `incenter.py`
+  (the most common mistake). If it's genuinely one of the actions, the
+  batch version prints a step-by-step trace to the ReaScript console
+  (right-click the action in the Action List for the console option).
+- **"No Python 3 found":** install numpy+scipy in your Python 3, or set
+  `PYTHON_OVERRIDE` near the top of the batch script to its full path.
+- **The batch action freezes the UI while processing:** expected —
+  `ExecProcess` blocks the main thread until the worker exits. Batching
+  keeps it as short as possible, but it isn't instant on long files.
+
+## Requirements
+
+- REAPER (developed on the portable macOS build, Apple Silicon)
+- ReaImGui — for the control panel only
+- Python 3 with `numpy` and `scipy`
+- Stereo WAV sources (24-bit/48 kHz is the primary target; other stereo
+  WAVs work too)
+
+## Changelog
+
+- **0.9.0** — First public release. Per-band attack/tail centering,
+  GCC-PHAT alignment on the loudest region, auto window selection,
+  format- and metadata-preserving WAV I/O, output to the project media
+  folder, shared Lua core, control panel, batch action.
+  Experimental Windows support.
+
+## Credits & reporting
+
+Built by Budash Audio. Bug reports and feedback are welcome — please
+include your OS, REAPER version, and the ReaScript console output if the
+panel showed an error.
+
+## License
+
+MIT — see [LICENSE](LICENSE). Copyright (c) 2026 Budash Audio.
+
+Product and company names mentioned may be trademarks of their respective
+owners; InCenter is not affiliated with or endorsed by any of them.
