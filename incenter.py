@@ -172,7 +172,10 @@ def _encode_int(x, bits):
 
 
 def _encode_samples(x, audio_fmt, bits):
-    x = np.clip(x, -1.0, 1.0)
+    # Integer formats are clipped inside _encode_int (at the scaled-integer
+    # level, which is equivalent to clipping x first). Float formats must
+    # NOT be clipped here - _finalize_and_write relies on float output
+    # keeping an over-0dBFS peak untouched, only warning about it.
     if audio_fmt == 1 and bits == 24:
         v = _encode_int(x, 24).astype(np.int32)
         u = (v & 0xFFFFFF).reshape(-1)
