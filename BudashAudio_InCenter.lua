@@ -158,7 +158,8 @@ local function do_process()
     strength = strength, tail_strength = tail_strength, collapse = collapse,
     align = align, win = WIN_VALUES[win_idx + 1] or "auto", verbose = false,
   }
-  local ok_map, err_map = core.run_batch(python, dsp, paths, opts, out_dir)
+  local ok_map, err_map, _output, diag_map = core.run_batch(python, dsp, paths, opts, out_dir)
+  diag_map = diag_map or {}
 
   reaper.Undo_BeginBlock()
   reaper.PreventUIRefresh(1)
@@ -188,6 +189,26 @@ local function do_process()
   end
   table.insert(lines, 1, string.format("Processed %d of %d item(s)%s.",
     done, #candidates, used_project and " -> project media folder" or ""))
+
+  -- What InCenter actually measured, even when it decided to do nothing -
+  -- one line for a single item, one per file (prefixed) for several.
+  -- Inserted right after the "Processed N of M" summary above.
+  local diag_lines = {}
+  for _, c in ipairs(candidates) do
+    local payload = diag_map[c.path]
+    local formatted = payload and core.format_diag(payload)
+    if formatted then
+      if #candidates > 1 then
+        table.insert(diag_lines, core.basename(c.path) .. ": " .. formatted)
+      else
+        table.insert(diag_lines, formatted)
+      end
+    end
+  end
+  for i = #diag_lines, 1, -1 do
+    table.insert(lines, 2, diag_lines[i])
+  end
+
   set_status(lines)
 end
 

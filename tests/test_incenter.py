@@ -369,6 +369,68 @@ class TestCollapse:
         assert gain <= 10 ** (12.0 / 20.0) + 1e-9
 
 
+# --------------------------------------------------------------- diagnostics
+
+class TestRecenterBandsDiagnostics:
+    """recenter_bands returns (y, diag) - diag is what lets the tool say
+    'measured no offset, applied nothing' instead of staying silent."""
+
+    def test_returns_a_tuple_with_expected_diag_keys(self):
+        sr = 48000
+        left = sine(300, sr, 0.3, amp=0.3)
+        right = sine(300, sr, 0.3, amp=0.1)
+        x = stereo(left, right)
+        y, diag = ic.recenter_bands(x, sr, strength=1.0, n_bands=8,
+                                    nperseg=512, verbose=False)
+        assert y.shape == x.shape
+        assert set(diag.keys()) == {
+            "offset_deg", "attack_deg", "tail_deg", "spread_deg", "win", "n_bands",
+        }
+        assert diag["win"] == 512
+        assert diag["n_bands"] <= 8
+
+    def test_offset_deg_is_attack_angle_minus_45_and_signed(self):
+        sr = 48000
+        left = sine(300, sr, 0.3, amp=0.3)
+        right = sine(300, sr, 0.3, amp=0.1)  # panned right of centre
+        x = stereo(left, right)
+        _, diag = ic.recenter_bands(x, sr, strength=1.0, n_bands=8,
+                                    nperseg=512, verbose=False)
+        assert diag["offset_deg"] == pytest.approx(diag["attack_deg"] - 45.0, abs=1e-9)
+
+    def test_symmetric_centred_signal_measures_near_zero_offset(self):
+        sr = 48000
+        left = sine(400, sr, 0.3, amp=0.25)
+        right = sine(400, sr, 0.3, amp=0.25)  # dead centre
+        x = stereo(left, right)
+        _, diag = ic.recenter_bands(x, sr, strength=1.0, n_bands=8,
+                                    nperseg=512, verbose=False)
+        assert abs(diag["offset_deg"]) < 0.5
+
+    def test_spread_is_percentile_90_minus_10_of_per_band_attack_angles(self):
+        # A signal whose pan angle varies strongly with frequency should
+        # show a wide per-band spread - the "frequency-dependent tilt"
+        # the diagnostic is meant to surface.
+        sr = 48000
+        dur = 0.3
+        low = sine(150, sr, dur, amp=0.3) + sine(150, sr, dur, amp=0.05, phase=0)
+        # low band panned right, high band panned left, both attack-like
+        # (an onset at t=0 keeps the mask from being all-tail).
+        left = sine(150, sr, dur, amp=0.1) + sine(6000, sr, dur, amp=0.3)
+        right = sine(150, sr, dur, amp=0.3) + sine(6000, sr, dur, amp=0.05)
+        x = stereo(left, right)
+        _, diag = ic.recenter_bands(x, sr, strength=1.0, n_bands=8,
+                                    nperseg=512, verbose=False)
+        assert diag["spread_deg"] >= 0.0
+
+    def test_spread_is_zero_with_a_single_band(self):
+        sr = 48000
+        x = stereo(sine(300, sr, 0.2, amp=0.3), sine(300, sr, 0.2, amp=0.2))
+        _, diag = ic.recenter_bands(x, sr, strength=1.0, n_bands=1,
+                                    nperseg=256, verbose=False)
+        assert diag["spread_deg"] == pytest.approx(0.0)
+
+
 # --------------------------------------------------------------- pipeline
 
 class TestIsBypass:
@@ -410,6 +472,19 @@ class TestProcessOneBypass:
         np.testing.assert_array_equal(y, x2)
         assert info2.bits == 16
 
+    def test_bypass_returns_none_not_a_zeroed_diag(self, tmp_path):
+        # A bypass must never look like "measured zero offset" - it made
+        # no measurement at all.
+        sr = 44100
+        x = stereo(sine(440, sr, 0.05), sine(440, sr, 0.05))
+        info = ic.WavInfo(sr=sr, audio_fmt=1, bits=16, ch=2, extra_chunks=[])
+        in_path = tmp_path / "in.wav"
+        ic.write_wav(str(in_path), x, info)
+        out_path = tmp_path / "out.wav"
+        args = default_args(strength=0.0, tail_strength=0.0, collapse=0.0, align=False)
+        result = ic.process_one(str(in_path), str(out_path), args, verbose=False)
+        assert result is None
+
 
 class TestProcessOnePipeline:
     def test_full_pipeline_runs_and_preserves_shape(self, tmp_path):
@@ -424,12 +499,31 @@ class TestProcessOnePipeline:
         out_path = tmp_path / "out.wav"
         args = default_args(strength=1.0, tail_strength=1.0, collapse=0.3,
                             align=True, win=512, n_bands=8)
-        ic.process_one(str(in_path), str(out_path), args, verbose=False)
+        diag = ic.process_one(str(in_path), str(out_path), args, verbose=False)
 
         sr2, y, info2 = ic.read_wav(str(out_path))
         assert sr2 == sr
         assert len(y) == len(x)
         assert info2.bits == 24
+        assert diag is not None
+        assert set(diag.keys()) == {
+            "offset_deg", "attack_deg", "tail_deg", "spread_deg", "win", "n_bands",
+        }
+
+    def test_verbose_prints_measured_summary(self, tmp_path, capsys):
+        sr = 48000
+        x = stereo(sine(300, sr, 0.2, amp=0.3), sine(300, sr, 0.2, amp=0.1))
+        info = ic.WavInfo(sr=sr, audio_fmt=1, bits=16, ch=2, extra_chunks=[])
+        in_path = tmp_path / "in.wav"
+        ic.write_wav(str(in_path), x, info)
+        out_path = tmp_path / "out.wav"
+        args = default_args(strength=1.0, tail_strength=1.0, collapse=0.0,
+                            align=False, win=256, n_bands=4)
+        ic.process_one(str(in_path), str(out_path), args, verbose=True)
+        out = capsys.readouterr().out
+        assert "measured:" in out
+        assert "offset" in out
+        assert "spread" in out
 
     def test_collapse_without_align_warns(self, tmp_path, capsys):
         sr = 44100
@@ -490,7 +584,56 @@ class TestRunBatch:
         assert f"##OK##\t{good_in}\t{good_out}" in out
         assert out.count("##ERR##") == 1
         assert good_out.exists()
+        # bypass (strength=tail_strength=collapse=0, align=False) makes no
+        # measurement, so no ##DIAG## line for it.
+        assert "##DIAG##" not in out
         assert not missing_out.exists()
+
+    def test_diag_line_precedes_ok_line_for_a_processed_file(self, tmp_path, capsys):
+        sr = 48000
+        x = stereo(sine(300, sr, 0.2, amp=0.3), sine(300, sr, 0.2, amp=0.1))
+        info = ic.WavInfo(sr=sr, audio_fmt=1, bits=16, ch=2, extra_chunks=[])
+        in_wav = tmp_path / "in.wav"
+        ic.write_wav(str(in_wav), x, info)
+        out_wav = tmp_path / "out.wav"
+        manifest = tmp_path / "manifest.txt"
+        manifest.write_text(f"{in_wav}\t{out_wav}\n")
+
+        args = default_args(strength=1.0, tail_strength=1.0, collapse=0.0,
+                            align=False, win=256, n_bands=4)
+        ic.run_batch(str(manifest), args, verbose=False)
+
+        out = capsys.readouterr().out
+        diag_idx = out.index("##DIAG##")
+        ok_idx = out.index("##OK##")
+        assert diag_idx < ok_idx  # DIAG must come before OK, per the spec
+
+        diag_line = out.splitlines()[out[:diag_idx].count("\n")]
+        tag, path, payload = diag_line.split("\t")
+        assert tag == "##DIAG##"
+        assert path == str(in_wav)
+        # same tab-delimited shape as ##OK##/##ERR##, key=value;... payload
+        keys = dict(kv.split("=") for kv in payload.split(";"))
+        assert set(keys) == {"offset", "attack", "tail", "spread", "win", "bands"}
+        assert keys["offset"].startswith("+") or keys["offset"].startswith("-")
+        assert "\t" not in payload and " " not in payload
+
+    def test_diag_line_printed_even_with_quiet(self, tmp_path, capsys):
+        sr = 48000
+        x = stereo(sine(300, sr, 0.2, amp=0.3), sine(300, sr, 0.2, amp=0.1))
+        info = ic.WavInfo(sr=sr, audio_fmt=1, bits=16, ch=2, extra_chunks=[])
+        in_wav = tmp_path / "in.wav"
+        ic.write_wav(str(in_wav), x, info)
+        out_wav = tmp_path / "out.wav"
+        manifest = tmp_path / "manifest.txt"
+        manifest.write_text(f"{in_wav}\t{out_wav}\n")
+
+        args = default_args(strength=1.0, tail_strength=1.0, collapse=0.0,
+                            align=False, win=256, n_bands=4, quiet=True)
+        # verbose=False mirrors --quiet at the CLI layer.
+        ic.run_batch(str(manifest), args, verbose=False)
+        out = capsys.readouterr().out
+        assert "##DIAG##" in out
 
     def test_malformed_manifest_line_reported(self, tmp_path, capsys):
         manifest = tmp_path / "bad_manifest.txt"
@@ -500,3 +643,4 @@ class TestRunBatch:
         out = capsys.readouterr().out
         assert "##ERR##" in out
         assert "malformed manifest line" in out
+

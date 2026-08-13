@@ -171,9 +171,79 @@ describe("incenter_core", function()
     end)
 
     it("handles empty output", function()
-      local ok_map, err_map = core.parse_batch_output("")
+      local ok_map, err_map, diag_map = core.parse_batch_output("")
       assert.same({}, ok_map)
       assert.same({}, err_map)
+      assert.same({}, diag_map)
+    end)
+
+    it("captures ##DIAG## lines into a third map, keyed by input path", function()
+      local output = table.concat({
+        "##DIAG##\t/a/in.wav\toffset=+3.24;attack=48.24;tail=44.10;spread=6.80;win=2048;bands=24",
+        "##OK##\t/a/in.wav\t/a/out.wav",
+      }, "\n")
+      local ok_map, err_map, diag_map = core.parse_batch_output(output)
+      assert.equal("/a/out.wav", ok_map["/a/in.wav"])
+      assert.same({}, err_map)
+      assert.equal(
+        "offset=+3.24;attack=48.24;tail=44.10;spread=6.80;win=2048;bands=24",
+        diag_map["/a/in.wav"])
+    end)
+  end)
+
+  describe("format_diag", function()
+    local core = load_core()
+
+    it("reports an off-centre measurement with direction words, not signs", function()
+      local line = core.format_diag(
+        "offset=+3.24;attack=48.24;tail=44.10;spread=6.80;win=2048;bands=24")
+      assert.truthy(line:match("right"))
+      assert.is_nil(line:match("%+3%.24"))  -- prose uses "right", not a signed number
+      assert.truthy(line:match("3%.2"))
+      assert.truthy(line:match("48%.2"))
+      assert.truthy(line:match("44%.1"))
+      assert.truthy(line:match("6%.8"))
+      assert.truthy(line:match("2048"))
+    end)
+
+    it("uses 'left' for a negative offset", function()
+      local line = core.format_diag(
+        "offset=-5.00;attack=40.00;tail=44.10;spread=6.80;win=2048;bands=24")
+      assert.truthy(line:match("left"))
+      assert.is_nil(line:match("right"))
+    end)
+
+    it("says plainly the source is already centred below threshold", function()
+      local line = core.format_diag(
+        "offset=+0.40;attack=45.40;tail=44.90;spread=1.10;win=2048;bands=24")
+      assert.truthy(line:match("already centred"))
+      assert.truthy(line:match("nothing to correct"))
+      assert.is_nil(line:match("right"))
+      assert.is_nil(line:match("left"))
+    end)
+
+    it("does not call a small measurement a failure", function()
+      local line = core.format_diag(
+        "offset=+0.10;attack=45.10;tail=45.00;spread=0.50;win=1024;bands=24")
+      assert.is_nil(line:lower():match("fail"))
+      assert.is_nil(line:lower():match("error"))
+    end)
+
+    it("requires BOTH offset and spread under threshold to call it centred", function()
+      -- small offset but wide per-band spread: real per-band tilt exists,
+      -- must not be reported as "already centred".
+      local line = core.format_diag(
+        "offset=+0.50;attack=45.50;tail=40.00;spread=5.00;win=2048;bands=24")
+      assert.is_nil(line:match("already centred"))
+    end)
+
+    it("returns nil for a payload missing required fields", function()
+      assert.is_nil(core.format_diag("attack=48.24;win=2048"))
+    end)
+
+    it("returns nil for an empty or nil payload", function()
+      assert.is_nil(core.format_diag(""))
+      assert.is_nil(core.format_diag(nil))
     end)
   end)
 
@@ -586,6 +656,43 @@ describe("incenter_core", function()
       assert.truthy(err_map["/a.wav"]:match("ModuleNotFoundError"))
       assert.truthy(err_map["/b.wav"]:match("ModuleNotFoundError"))
       assert.equal("", _G.reaper.GetExtState("incenter", "python_path"))
+    end)
+
+    it("exposes diag_map as a 4th return value, keeping the first three unchanged", function()
+      local core = load_core()
+      core.run_worker = function(_args, _timeout)
+        return true, table.concat({
+          "##DIAG##\t/a.wav\toffset=+3.24;attack=48.24;tail=44.10;spread=6.80;win=2048;bands=24",
+          "##OK##\t/a.wav\t/a_centered_120000.wav",
+        }, "\n")
+      end
+
+      local ok_map, err_map, output, diag_map = core.run_batch(
+        "/usr/bin/python3", "/dsp/incenter.py",
+        paths_set({ "/a.wav" }),
+        { strength = 1.0, tail_strength = 1.0, align = false, verbose = false },
+        "/out/"
+      )
+      assert.equal("/a_centered_120000.wav", ok_map["/a.wav"])
+      assert.same({}, err_map)
+      assert.is_string(output)
+      assert.equal(
+        "offset=+3.24;attack=48.24;tail=44.10;spread=6.80;win=2048;bands=24",
+        diag_map["/a.wav"])
+    end)
+
+    it("still returns a (possibly empty) diag_map when the worker fails", function()
+      local core = load_core()
+      core.run_worker = function(_args, _timeout)
+        return false, "boom"
+      end
+      local _ok, _err, _output, diag_map = core.run_batch(
+        "/usr/bin/python3", "/dsp/incenter.py",
+        paths_set({ "/a.wav" }),
+        { strength = 1.0, tail_strength = 1.0, align = false, verbose = false },
+        "/out/"
+      )
+      assert.same({}, diag_map)
     end)
   end)
 

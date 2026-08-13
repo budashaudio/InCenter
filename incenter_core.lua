@@ -308,19 +308,58 @@ function core.run_worker(args, timeout_ms)
   return ok, output
 end
 
--- Parses the "##OK##\tin\tout" / "##ERR##\tin\tmessage" lines incenter.py
--- prints per file in --batch mode. Returns two tables keyed by input path.
+-- Parses the "##OK##\tin\tout" / "##ERR##\tin\tmessage" /
+-- "##DIAG##\tin\tpayload" lines incenter.py prints per file in --batch
+-- mode. Returns three tables keyed by input path; ok_map/err_map keep
+-- their original positions and meaning, so callers that ignore diag_map
+-- keep working unchanged.
 function core.parse_batch_output(output)
-  local ok_map, err_map = {}, {}
+  local ok_map, err_map, diag_map = {}, {}, {}
   for line in (output or ""):gmatch("[^\n]+") do
     local tag, in_path, rest = line:match("^(##%a+##)\t([^\t]+)\t(.*)$")
     if tag == "##OK##" then
       ok_map[in_path] = rest
     elseif tag == "##ERR##" then
       err_map[in_path] = rest
+    elseif tag == "##DIAG##" then
+      diag_map[in_path] = rest
     end
   end
-  return ok_map, err_map
+  return ok_map, err_map, diag_map
+end
+
+-- Turns a ##DIAG## payload ("offset=+3.24;attack=48.24;tail=44.10;
+-- spread=6.80;win=2048;bands=24", see incenter.py's run_batch) into one
+-- human-readable status line. Returns nil if the payload doesn't parse -
+-- the diag line is optional decoration, never a hard dependency, so a
+-- malformed/absent one must not break either front-end.
+function core.format_diag(payload)
+  local v = {}
+  for key, val in (payload or ""):gmatch("([%a_]+)=([^;]*)") do
+    v[key] = val
+  end
+  local offset = tonumber(v.offset)
+  local attack = tonumber(v.attack)
+  local tail = tonumber(v.tail)
+  local spread = tonumber(v.spread)
+  if not (offset and attack and tail and spread) then return nil end
+  local win = v.win or "?"
+
+  -- The exact case this whole feature exists for: a symmetric scene (or
+  -- one where the source moves across the base) measures near zero, and
+  -- that is the correct result, not a failure - say so plainly rather
+  -- than showing numbers that look like "nothing happened".
+  if math.abs(offset) < 1.0 and spread < 2.0 then
+    return string.format(
+      "Measured: already centred (%.1f\194\176 off, per-band spread %.1f\194\176) " ..
+      "\226\128\148 nothing to correct.", math.abs(offset), spread)
+  end
+
+  local dir = offset >= 0 and "right" or "left"
+  return string.format(
+    "Measured: image %.1f\194\176 %s (attack %.1f\194\176 / tail %.1f\194\176), " ..
+    "per-band spread %.1f\194\176, window %s.",
+    math.abs(offset), dir, attack, tail, spread, win)
 end
 
 -- ---- output location -------------------------------------------------
@@ -420,7 +459,8 @@ end
 --   opts         : { strength, tail_strength, collapse, align(bool),
 --                    win("auto" or number), verbose(bool) }
 --   out_dir      : directory to write corrected files into
--- Returns ok_map (src->out_path), err_map (src->message), output(string).
+-- Returns ok_map (src->out_path), err_map (src->message), output(string),
+-- diag_map (src->raw ##DIAG## payload, see core.format_diag).
 function core.run_batch(python, dsp, paths, opts, out_dir)
   local stamp = os.date("%H%M%S")
   local manifest_lines, out_for = {}, {}
@@ -437,7 +477,7 @@ function core.run_batch(python, dsp, paths, opts, out_dir)
   if not mf then
     local err_map = {}
     for path in pairs(paths) do err_map[path] = "could not write batch manifest" end
-    return {}, err_map, ""
+    return {}, err_map, "", {}
   end
   mf:write(table.concat(manifest_lines, "\n") .. "\n")
   mf:close()
@@ -469,10 +509,10 @@ function core.run_batch(python, dsp, paths, opts, out_dir)
     end
     -- A failed run may mean a stale cached interpreter; force a re-scan next time.
     core.clear_python_cache()
-    return {}, err_map, output or ""
+    return {}, err_map, output or "", {}
   end
 
-  local ok_map, err_map = core.parse_batch_output(output or "")
+  local ok_map, err_map, diag_map = core.parse_batch_output(output or "")
   -- Anything neither confirmed ok nor explicitly erred (killed mid-batch)
   -- counts as failed rather than silently skipped.
   for path in pairs(paths) do
@@ -480,7 +520,7 @@ function core.run_batch(python, dsp, paths, opts, out_dir)
       err_map[path] = "no result reported (worker may have been interrupted)"
     end
   end
-  return ok_map, err_map, output or ""
+  return ok_map, err_map, output or "", diag_map
 end
 
 return core

@@ -104,7 +104,8 @@ local function main()
     strength = STRENGTH, tail_strength = TAIL_STRENGTH, collapse = COLLAPSE,
     align = ALIGN, win = WIN, verbose = VERBOSE,
   }
-  local ok_map, err_map, output = core.run_batch(python, dsp, paths, opts, out_dir)
+  local ok_map, err_map, output, diag_map = core.run_batch(python, dsp, paths, opts, out_dir)
+  diag_map = diag_map or {}
 
   if VERBOSE and output and output:match("%S") then
     msg(output)
@@ -123,6 +124,9 @@ local function main()
         local applied, aerr = core.apply_result(c.item, c.take, out_path)
         if applied then
           msg("ok: " .. core.basename(c.path) .. " -> " .. core.basename(out_path))
+          local payload = diag_map[c.path]
+          local formatted = payload and core.format_diag(payload)
+          if formatted then msg("   " .. formatted) end
           done = done + 1
         else
           table.insert(skip_lines, "skip: " .. core.basename(c.path) .. ": " .. aerr)

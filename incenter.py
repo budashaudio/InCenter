@@ -436,6 +436,12 @@ def recenter_bands(x, sr, strength, n_bands=24, nperseg=4096,
     Frames are softly classified attack/tail by broadband energy envelope;
     each band gets two angles (attack-weighted, tail-weighted) and the
     correction crossfades between them frame by frame.
+
+    Returns (y, diag). diag is a plain dict reporting what was measured -
+    offset_deg/attack_deg/tail_deg/spread_deg/win/n_bands - so a caller can
+    tell "measured no offset, applied nothing" apart from "broken", even
+    when the correction itself is a no-op. See process_one/run_batch for
+    how it reaches the user.
     """
     if tail_strength is None:
         tail_strength = strength
@@ -492,6 +498,7 @@ def recenter_bands(x, sr, strength, n_bands=24, nperseg=4096,
     if verbose:
         print(f"broadband: attack {a_att_bb:.1f}d  tail {a_tail_bb:.1f}d")
         print(f"{'band':>4}  {'freq range':>16}  {'attack':>7}  {'tail':>7}")
+    att_vals = []
     for bi, idx in enumerate(bands):
         l, r = ZL[idx, :], ZR[idx, :]
         el = np.sum(np.abs(l) ** 2, axis=0)
@@ -510,6 +517,7 @@ def recenter_bands(x, sr, strength, n_bands=24, nperseg=4096,
         lt = wt / (wt + w_ref)
         a_att = la * a_att + (1.0 - la) * a_att_bb
         a_tail = lt * a_tail + (1.0 - lt) * a_tail_bb
+        att_vals.append(a_att)
 
         c_att = np.clip(strength * (45.0 - a_att), -max_corr_deg, max_corr_deg)
         c_tail = np.clip(tail_strength * (45.0 - a_tail),
@@ -529,7 +537,22 @@ def recenter_bands(x, sr, strength, n_bands=24, nperseg=4096,
     y = np.stack([yl[:n], yr[:n]], axis=1)
     if n < len(x):
         y = np.pad(y, ((0, len(x) - n), (0, 0)))
-    return y
+
+    # spread_deg: 90th-10th percentile spread of the per-band attack angles
+    # (percentiles rather than min/max so one junk band can't dominate) -
+    # the frequency-dependent tilt that per-band correction has to work
+    # with, and that a plain L/R gain trim cannot fix.
+    spread_deg = (float(np.percentile(att_vals, 90) - np.percentile(att_vals, 10))
+                 if att_vals else 0.0)
+    diag = {
+        "offset_deg": float(a_att_bb - 45.0),
+        "attack_deg": float(a_att_bb),
+        "tail_deg": float(a_tail_bb),
+        "spread_deg": spread_deg,
+        "win": int(nperseg),
+        "n_bands": int(len(bands)),
+    }
+    return y, diag
 
 
 # ---------------------------------------------------------------- main
@@ -547,7 +570,12 @@ def _is_bypass(args):
 def process_one(in_path, out_path, args, verbose):
     """Run the full pipeline (align -> recenter -> collapse -> normalize ->
     write) for a single file. Raises ValueError on bad input, same as
-    read_wav always has."""
+    read_wav always has.
+
+    Returns the diag dict from recenter_bands (see there), or None on the
+    bypass path - a bypass produces no measurement, and must never be
+    mistaken for a measurement of zero offset.
+    """
     sr, x, info = read_wav(in_path)
     v = verbose
 
@@ -567,7 +595,7 @@ def process_one(in_path, out_path, args, verbose):
         if v:
             print("bypass: no correction requested, copying audio through")
         _finalize_and_write(out_path, x, info, args, v)
-        return
+        return None
 
     if args.align:
         x = align(x, sr, verbose=v)
@@ -576,9 +604,13 @@ def process_one(in_path, out_path, args, verbose):
     # useful sound length.
     win = auto_win(x, sr, verbose=v) if args.win == "auto" else int(args.win)
 
-    y = recenter_bands(x, sr, args.strength, n_bands=args.n_bands,
-                       nperseg=win,
-                       tail_strength=args.tail_strength, verbose=v)
+    y, diag = recenter_bands(x, sr, args.strength, n_bands=args.n_bands,
+                             nperseg=win,
+                             tail_strength=args.tail_strength, verbose=v)
+    if v:
+        print(f"measured: offset {diag['offset_deg']:+.2f}d "
+              f"(attack {diag['attack_deg']:.2f}d / tail {diag['tail_deg']:.2f}d), "
+              f"per-band spread {diag['spread_deg']:.2f}d, window {diag['win']}")
 
     # Width reduction comes last, on already-centred audio.
     if args.collapse > 0.0:
@@ -595,6 +627,7 @@ def process_one(in_path, out_path, args, verbose):
                 print(f"collapse: level compensated {20*np.log10(g):+.2f} dB")
 
     _finalize_and_write(out_path, y, info, args, v)
+    return diag
 
 
 def _finalize_and_write(out_path, y, info, args, v):
@@ -647,7 +680,19 @@ def run_batch(manifest_path, args, verbose):
             continue
         in_path, out_path = parts
         try:
-            process_one(in_path, out_path, args, verbose)
+            diag = process_one(in_path, out_path, args, verbose)
+            if diag is not None:
+                payload = (
+                    f"offset={diag['offset_deg']:+.2f};"
+                    f"attack={diag['attack_deg']:.2f};"
+                    f"tail={diag['tail_deg']:.2f};"
+                    f"spread={diag['spread_deg']:.2f};"
+                    f"win={diag['win']};"
+                    f"bands={diag['n_bands']}"
+                )
+                # Machine channel the Lua side parses - always printed,
+                # regardless of --quiet (which only suppresses human chatter).
+                print(f"##DIAG##\t{in_path}\t{payload}")
             print(f"##OK##\t{in_path}\t{out_path}")
             ok_count += 1
         except Exception as e:

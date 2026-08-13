@@ -125,6 +125,19 @@ A few non-obvious decisions, in case you're reading the source:
   support is implemented but **experimental** — please report back if you
   run it there.
 
+### What InCenter does not do
+
+- It corrects a **static offset of the whole stereo scene**. It measures
+  one angle per frequency band across the file and rotates each band back.
+- It does **not** separate sources. It cannot tell a footstep from the
+  street behind it, and it cannot move one and leave the other.
+- On material where sources move across the stereo base, or where the
+  scene is already symmetric, the measured offset will be near zero and
+  **no correction is applied — this is the correct result, not a
+  failure**. The status line after processing reports the measurement so
+  you can see this for yourself.
+- Movement of a source across the image is content, not a defect.
+
 ## Troubleshooting
 
 - **Nothing happens / REAPER seems frozen:** first check you loaded
