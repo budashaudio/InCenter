@@ -308,11 +308,13 @@ function core.run_worker(args, timeout_ms)
   return ok, output
 end
 
--- Parses the "##OK##\tin\tout" / "##ERR##\tin\tmessage" /
--- "##DIAG##\tin\tpayload" lines incenter.py prints per file in --batch
--- mode. Returns three tables keyed by input path; ok_map/err_map keep
--- their original positions and meaning, so callers that ignore diag_map
--- keep working unchanged.
+-- Parses the "##OK##\tid\tin" / "##ERR##\tid\tmessage" /
+-- "##DIAG##\tid\tpayload" lines incenter.py prints per line in --batch
+-- mode. Returns three tables keyed by id - incenter.py uses out_path as
+-- the id (unique per job, unlike in_path: two jobs can share a source
+-- file with different regions). ok_map/err_map keep their original
+-- positions and meaning, so callers that ignore diag_map keep working
+-- unchanged.
 function core.parse_batch_output(output)
   local ok_map, err_map, diag_map = {}, {}, {}
   for line in (output or ""):gmatch("[^\n]+") do
@@ -382,13 +384,18 @@ function core.output_dir(src_path)
 end
 
 -- Build <name>_centered_<HHMMSS>[_n].wav in `out_dir`, deduplicated
--- against files already there. Suffix is always _centered (output is
+-- against files already there AND against `allocated` (paths already
+-- claimed by other jobs earlier in this same run, before any of them
+-- have actually been written to disk yet - needed once two jobs can
+-- share a source path with different regions: checking disk existence
+-- alone would hand them the same filename, since neither exists there
+-- until the batch actually runs). Suffix is always _centered (output is
 -- always WAV, so the extension is forced to .wav).
-function core.make_out_path(src_path, out_dir, stamp)
+function core.make_out_path(src_path, out_dir, stamp, allocated)
   local _, name = core.split_ext(src_path)
   local out_path = out_dir .. name .. "_centered_" .. stamp .. ".wav"
   local n = 1
-  while core.file_exists(out_path) do
+  while core.file_exists(out_path) or (allocated and allocated[out_path]) do
     n = n + 1
     out_path = out_dir .. name .. "_centered_" .. stamp .. "_" .. n .. ".wav"
   end
@@ -422,13 +429,56 @@ function core.validate_item(item)
   return take, path, nil
 end
 
+-- The item's region, in SOURCE time (seconds) - where inside the source
+-- file the item's content actually lives, for an already-validated
+-- item/take. D_STARTOFFS is where the item starts inside the source;
+-- D_LENGTH is the item's length on the timeline, which must be scaled by
+-- D_PLAYRATE to get length in SOURCE time - a non-1.0 playrate silently
+-- gives the wrong region if this is skipped (a 2x playrate item spanning
+-- 1s of timeline covers 2s of source). Defensively clamps a negative
+-- start to 0; the authoritative end-of-file clamp happens on the Python
+-- side, which is the only side that knows the source's real sample
+-- count (an item can legitimately extend past its source - REAPER draws
+-- silence there - and Lua has no cheap way to detect that itself).
+function core.get_item_region(item, take)
+  local start_sec = reaper.GetMediaItemTakeInfo_Value(take, "D_STARTOFFS") or 0.0
+  local length_sec = reaper.GetMediaItemInfo_Value(item, "D_LENGTH") or 0.0
+  local playrate = reaper.GetMediaItemTakeInfo_Value(take, "D_PLAYRATE") or 1.0
+  if start_sec < 0 then start_sec = 0.0 end
+  if playrate <= 0 then playrate = 1.0 end   -- defensive; should never happen
+  length_sec = length_sec * playrate
+  if length_sec < 0 then length_sec = 0.0 end
+  return start_sec, length_sec
+end
+
+-- Identifies one processing job: a source path plus the region cut from
+-- it. Two items sharing a source but trimmed to different regions must
+-- get different job keys - see core.run_batch for why (this is the
+-- dedup fix the item-region feature depends on: without it, the second
+-- item would silently receive the first item's output). \30 is a
+-- separator that can't realistically appear in a path or a
+-- %.9f-formatted number.
+function core.make_job_key(src_path, start_sec, length_sec)
+  return string.format("%s\30%.9f\30%.9f", src_path, start_sec, length_sec)
+end
+
 -- Repoints an already-validated item's take at a corrected file. Position,
--- length, trim, fades, envelopes and track are all untouched; only the
--- audio behind the item changes. The old PCM_source is deliberately not
--- destroyed - destroying one still shared between takes segfaults inside
--- SetActiveTake; a small leak per run is the better trade.
+-- length, fades, envelopes, track and playrate are all untouched; only
+-- the audio behind the item changes. The old PCM_source is deliberately
+-- not destroyed - destroying one still shared between takes segfaults
+-- inside SetActiveTake; a small leak per run is the better trade.
 -- ValidatePtr2 guards against the item/take having been deleted by the
 -- user during processing. Returns true or false, error_message.
+--
+-- D_STARTOFFS is reset to 0 unconditionally: the corrected file's
+-- sample 0 IS the start of whatever region was processed (see
+-- core.get_item_region - the region's start is read from the take's OWN
+-- existing D_STARTOFFS), so the old offset would now point past a file
+-- that may be much shorter than the original source. Left unreset, the
+-- symptom is silent - the take plays silence or the wrong audio, not an
+-- error - which is exactly why this can't be conditional on "did this
+-- job actually crop a region": every corrected file's sample 0 means
+-- the same thing now, cropped or not.
 function core.apply_result(item, take, out_path)
   if reaper.ValidatePtr2 then
     if not reaper.ValidatePtr2(0, item, "MediaItem*") then
@@ -441,6 +491,7 @@ function core.apply_result(item, take, out_path)
   local new_source = reaper.PCM_Source_CreateFromFile(out_path)
   if not new_source then return false, "could not open the corrected file" end
   reaper.SetMediaItemTake_Source(take, new_source)
+  reaper.SetMediaItemTakeInfo_Value(take, "D_STARTOFFS", 0.0)
   core.build_peaks(new_source)
   reaper.GetSetMediaItemTakeInfo_String(take, "P_NAME", core.basename(out_path), true)
   reaper.UpdateItemInProject(item)
@@ -449,26 +500,37 @@ end
 
 -- ---- batch runner ----------------------------------------------------
 
--- Runs incenter.py once for every unique path in `paths` (a path->true
--- set). One process launch for the whole batch instead of one per file:
--- scipy's ~2s import is paid once, and the UI (ExecProcess blocks the main
--- thread) freezes for one run instead of N back-to-back.
+-- Runs incenter.py once for every job in `jobs`. One process launch for
+-- the whole batch instead of one per file: scipy's ~2s import is paid
+-- once, and the UI (ExecProcess blocks the main thread) freezes for one
+-- run instead of N back-to-back.
 --   python       : interpreter path
 --   dsp          : full path to incenter.py
---   paths        : set { [src_path]=true, ... }
+--   jobs         : table { [job_key] = { src_path, start_sec, length_sec } }
+--                  - see core.make_job_key. Two items sharing a source
+--                  file but cropped to different regions are two
+--                  different jobs (different job_key), NOT deduped into
+--                  one - that's the whole point of keying on region as
+--                  well as path.
 --   opts         : { strength, tail_strength, collapse, align(bool),
 --                    win("auto" or number), verbose(bool) }
 --   out_dir      : directory to write corrected files into
--- Returns ok_map (src->out_path), err_map (src->message), output(string),
--- diag_map (src->raw ##DIAG## payload, see core.format_diag).
-function core.run_batch(python, dsp, paths, opts, out_dir)
+-- Returns ok_map (job_key->out_path), err_map (job_key->message),
+-- output(string), diag_map (job_key->raw ##DIAG## payload, see
+-- core.format_diag) - all keyed by job_key, the same key `jobs` used,
+-- regardless of how incenter.py itself keys its ##OK##/##ERR##/##DIAG##
+-- lines (out_path - see incenter.py's run_batch for why). Callers never
+-- need to know that translation happened.
+function core.run_batch(python, dsp, jobs, opts, out_dir)
   local stamp = os.date("%H%M%S")
-  local manifest_lines, out_for = {}, {}
+  local manifest_lines, out_for, allocated = {}, {}, {}
   local n = 0
-  for path in pairs(paths) do
-    local out_path = core.make_out_path(path, out_dir, stamp)
-    out_for[path] = out_path
-    table.insert(manifest_lines, path .. "\t" .. out_path)
+  for job_key, job in pairs(jobs) do
+    local out_path = core.make_out_path(job.src_path, out_dir, stamp, allocated)
+    allocated[out_path] = true
+    out_for[job_key] = out_path
+    table.insert(manifest_lines, job.src_path .. "\t" .. out_path .. "\t" ..
+      tostring(job.start_sec) .. "\t" .. tostring(job.length_sec))
     n = n + 1
   end
 
@@ -476,7 +538,7 @@ function core.run_batch(python, dsp, paths, opts, out_dir)
   local mf = io.open(manifest_path, "w")
   if not mf then
     local err_map = {}
-    for path in pairs(paths) do err_map[path] = "could not write batch manifest" end
+    for job_key in pairs(jobs) do err_map[job_key] = "could not write batch manifest" end
     return {}, err_map, "", {}
   end
   mf:write(table.concat(manifest_lines, "\n") .. "\n")
@@ -503,8 +565,8 @@ function core.run_batch(python, dsp, paths, opts, out_dir)
   if not ok then
     local last_line = (output or ""):match("([^\n]*)\n?$") or ""
     local err_map = {}
-    for path in pairs(paths) do
-      err_map[path] = "batch worker error: " ..
+    for job_key in pairs(jobs) do
+      err_map[job_key] = "batch worker error: " ..
         (last_line ~= "" and last_line or "unknown")
     end
     -- A failed run may mean a stale cached interpreter; force a re-scan next time.
@@ -512,12 +574,26 @@ function core.run_batch(python, dsp, paths, opts, out_dir)
     return {}, err_map, output or "", {}
   end
 
-  local ok_map, err_map, diag_map = core.parse_batch_output(output or "")
-  -- Anything neither confirmed ok nor explicitly erred (killed mid-batch)
-  -- counts as failed rather than silently skipped.
-  for path in pairs(paths) do
-    if not ok_map[path] and not err_map[path] then
-      err_map[path] = "no result reported (worker may have been interrupted)"
+  local ok_by_outpath, err_by_outpath, diag_by_outpath =
+    core.parse_batch_output(output or "")
+
+  -- Translate incenter.py's out_path-keyed results back to job_key,
+  -- which is what `jobs` was keyed by and what callers built their
+  -- candidates against. Anything neither confirmed ok nor explicitly
+  -- erred (killed mid-batch) counts as failed rather than silently
+  -- skipped.
+  local ok_map, err_map, diag_map = {}, {}, {}
+  for job_key in pairs(jobs) do
+    local out_path = out_for[job_key]
+    if ok_by_outpath[out_path] then
+      ok_map[job_key] = out_path
+    elseif err_by_outpath[out_path] then
+      err_map[job_key] = err_by_outpath[out_path]
+    else
+      err_map[job_key] = "no result reported (worker may have been interrupted)"
+    end
+    if diag_by_outpath[out_path] then
+      diag_map[job_key] = diag_by_outpath[out_path]
     end
   end
   return ok_map, err_map, output or "", diag_map
