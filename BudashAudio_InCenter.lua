@@ -99,6 +99,7 @@ local tail_strength = load_num("tail_strength", 1.0)
 local collapse      = load_num("collapse", 0.0)
 local win_idx       = math.floor(load_num("win_idx", 0))   -- 0 = Auto
 local align         = load_bool("align", true)
+local width_only    = load_bool("width_only", false)
 
 local function save_settings()
   reaper.SetExtState(EXT_SECTION, "strength", tostring(strength), true)
@@ -106,6 +107,7 @@ local function save_settings()
   reaper.SetExtState(EXT_SECTION, "collapse", tostring(collapse), true)
   reaper.SetExtState(EXT_SECTION, "win_idx", tostring(win_idx), true)
   reaper.SetExtState(EXT_SECTION, "align", align and "1" or "0", true)
+  reaper.SetExtState(EXT_SECTION, "width_only", width_only and "1" or "0", true)
 end
 
 -- ---- processing ------------------------------------------------------
@@ -162,8 +164,13 @@ local function do_process()
 
   local out_dir, used_project = core.output_dir(candidates[1].path)
 
+  -- "Width only" forces the strength/tail_strength values sent to
+  -- processing to 0, without touching the slider variables themselves -
+  -- so the slider positions are preserved for when the box is unchecked.
   local opts = {
-    strength = strength, tail_strength = tail_strength, collapse = collapse,
+    strength = width_only and 0.0 or strength,
+    tail_strength = width_only and 0.0 or tail_strength,
+    collapse = collapse,
     align = align, win = WIN_VALUES[win_idx + 1] or "auto", verbose = false,
   }
   local ok_map, err_map, _output, diag_map = core.run_batch(python, dsp, jobs, opts, out_dir)
@@ -404,6 +411,13 @@ local function loop()
         "for coincident ones (XY, MS).")
       reaper.ImGui_PopStyleColor(ctx)
     end
+
+    reaper.ImGui_Spacing(ctx)
+    reaper.ImGui_PushStyleColor(ctx, reaper.ImGui_Col_Text(), COL_ITEM_TEXT)
+    changed, width_only = reaper.ImGui_Checkbox(ctx, "Width only (skip centering)", width_only)
+    reaper.ImGui_PopStyleColor(ctx)
+    if changed then save_settings() end
+    colored_text("Applies width only, without re-centering.", COL_LABEL)
 
     reaper.ImGui_Dummy(ctx, 0, 4)
     reaper.ImGui_Separator(ctx)

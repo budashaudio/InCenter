@@ -22,6 +22,7 @@ local TAIL_STRENGTH = 1.0     -- 0 = leave tails untouched, 1 = correct like att
 local COLLAPSE      = 0.0     -- stereo width, applied last: 0 = untouched, 1 = mono
 local ALIGN         = true
 local WIN           = "auto"  -- "auto", or a number (512/1024/2048/4096)
+local WIDTH_ONLY    = false   -- true = force STRENGTH/TAIL_STRENGTH to 0 (width-only, faster: no STFT)
 local VERBOSE       = true
 
 -- If auto-detection can't find your python3 (the one with numpy+scipy),
@@ -109,7 +110,9 @@ local function main()
 
   -- Phase 2: one process launch for the whole batch.
   local opts = {
-    strength = STRENGTH, tail_strength = TAIL_STRENGTH, collapse = COLLAPSE,
+    strength = WIDTH_ONLY and 0.0 or STRENGTH,
+    tail_strength = WIDTH_ONLY and 0.0 or TAIL_STRENGTH,
+    collapse = COLLAPSE,
     align = ALIGN, win = WIN, verbose = VERBOSE,
   }
   local ok_map, err_map, output, diag_map = core.run_batch(python, dsp, jobs, opts, out_dir)
