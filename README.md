@@ -119,6 +119,9 @@ A few non-obvious decisions, in case you're reading the source:
   source that can't be decoded cleanly falls back to 32-bit float output.
 - **SECTION takes** (reversed or glued items) are skipped with a message —
   glue to a plain file first if you need to process one.
+- **Item region:** processing is scoped to the item's trimmed region (as
+  of 0.9.1) — an item covering the whole source file behaves as before,
+  and a trimmed item is measured and corrected using only its own content.
 - **Windows:** the macOS and Linux paths are the tested ones. Windows
   support is implemented but **experimental** — please report back if you
   run it there.
@@ -180,10 +183,19 @@ busted tests/lua --lpath="tests/lua/?.lua"
   GCC-PHAT alignment on the loudest region, auto window selection,
   format- and metadata-preserving WAV I/O, output to the project media
   folder, shared Lua core, control panel, batch action.
-  Experimental Windows support. Processing is now scoped to the item's
-  trimmed region rather than the whole source file, so a long file with
-  several separate events (e.g. radio chatter) can be centered piece by
-  piece.
+  Experimental Windows support.
+- **0.9.1** — Item-region processing: a trimmed item is now read, measured,
+  and corrected using only its own region of the source file, instead of
+  the whole file. This fixes the case where a long recording contains
+  several separate events at different stereo positions (e.g. radio
+  chatter) — previously an early near-centered event would dominate the
+  average and mask a badly off-center later one, making it unprocessable
+  piece by piece. Also: per-file diagnostic detail is now shown only for
+  single-item runs (a multi-item batch shows just the summary line); a new
+  "Width only" checkbox applies stereo width reduction without
+  re-centering, with a performance fix behind it (strength=0/tail=0 no
+  longer runs a needless STFT round trip); Stereo Width and "Width only"
+  no longer persist between sessions.
 
 ## Credits & reporting
 
