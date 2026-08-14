@@ -199,22 +199,20 @@ local function do_process()
     done, #candidates, used_project and " -> project media folder" or ""))
 
   -- What InCenter actually measured, even when it decided to do nothing -
-  -- one line for a single item, one per file (prefixed) for several.
-  -- Inserted right after the "Processed N of M" summary above.
-  local diag_lines = {}
-  for _, c in ipairs(candidates) do
-    local payload = diag_map[c.job_key]
+  -- shown only for a single item. On a multi-item batch the per-file
+  -- lines turn into a wall of text (confirmed in real testing - 7 items
+  -- meant 7 stacked lines under the summary), so a multi-item run shows
+  -- just the "Processed N of M" summary above with no per-file detail.
+  -- Checked against #candidates (how many were queued), not how many
+  -- diag lines happened to come back, since a batch could partially
+  -- fail; skip: lines for errors stay visible regardless of count -
+  -- those matter more with more items, not less.
+  if #candidates == 1 then
+    local payload = diag_map[candidates[1].job_key]
     local formatted = payload and core.format_diag(payload)
     if formatted then
-      if #candidates > 1 then
-        table.insert(diag_lines, core.basename(c.path) .. ": " .. formatted)
-      else
-        table.insert(diag_lines, formatted)
-      end
+      table.insert(lines, 2, formatted)
     end
-  end
-  for i = #diag_lines, 1, -1 do
-    table.insert(lines, 2, diag_lines[i])
   end
 
   set_status(lines)
