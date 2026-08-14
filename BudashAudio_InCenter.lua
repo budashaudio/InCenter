@@ -96,18 +96,20 @@ end
 
 local strength      = load_num("strength", 1.0)
 local tail_strength = load_num("tail_strength", 1.0)
-local collapse      = load_num("collapse", 0.0)
+-- Stereo Width and "Width only" are NOT persisted, unlike everything else
+-- on this panel: occasional-use settings Nikita has been forgetting were
+-- left on from a previous session, causing unexpected results next time.
+-- Both always start at their default, regardless of ExtState.
+local collapse      = 0.0
 local win_idx       = math.floor(load_num("win_idx", 0))   -- 0 = Auto
 local align         = load_bool("align", true)
-local width_only    = load_bool("width_only", false)
+local width_only    = false
 
 local function save_settings()
   reaper.SetExtState(EXT_SECTION, "strength", tostring(strength), true)
   reaper.SetExtState(EXT_SECTION, "tail_strength", tostring(tail_strength), true)
-  reaper.SetExtState(EXT_SECTION, "collapse", tostring(collapse), true)
   reaper.SetExtState(EXT_SECTION, "win_idx", tostring(win_idx), true)
   reaper.SetExtState(EXT_SECTION, "align", align and "1" or "0", true)
-  reaper.SetExtState(EXT_SECTION, "width_only", width_only and "1" or "0", true)
 end
 
 -- ---- processing ------------------------------------------------------
