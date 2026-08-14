@@ -134,15 +134,23 @@ local function do_process()
     return
   end
 
-  local candidates, paths, skip_lines = {}, {}, {}
+  -- Each candidate is keyed by job_key (source + region), not by source
+  -- path alone: two items trimmed from the same source to different
+  -- regions are two different jobs, and must not collapse into one
+  -- (the second would otherwise silently receive the first one's
+  -- output - the radio-chatter case this whole feature exists for).
+  local candidates, jobs, skip_lines = {}, {}, {}
   for i = 0, n_sel - 1 do
     local item = reaper.GetSelectedMediaItem(0, i)
     local take, path, err = core.validate_item(item)
     if err then
       table.insert(skip_lines, "skip: " .. err)
     else
-      table.insert(candidates, { item = item, take = take, path = path })
-      paths[path] = true
+      local start_sec, length_sec = core.get_item_region(item, take)
+      local job_key = core.make_job_key(path, start_sec, length_sec)
+      table.insert(candidates, { item = item, take = take, path = path,
+                                 job_key = job_key })
+      jobs[job_key] = { src_path = path, start_sec = start_sec, length_sec = length_sec }
     end
   end
 
@@ -158,7 +166,7 @@ local function do_process()
     strength = strength, tail_strength = tail_strength, collapse = collapse,
     align = align, win = WIN_VALUES[win_idx + 1] or "auto", verbose = false,
   }
-  local ok_map, err_map, _output, diag_map = core.run_batch(python, dsp, paths, opts, out_dir)
+  local ok_map, err_map, _output, diag_map = core.run_batch(python, dsp, jobs, opts, out_dir)
   diag_map = diag_map or {}
 
   reaper.Undo_BeginBlock()
@@ -167,14 +175,14 @@ local function do_process()
   -- Guard the apply loop: an exception must not leave PreventUIRefresh on.
   local apply_ok, apply_err = pcall(function()
     for _, c in ipairs(candidates) do
-      local out_path = ok_map[c.path]
+      local out_path = ok_map[c.job_key]
       if out_path then
         local applied, aerr = core.apply_result(c.item, c.take, out_path)
         if applied then done = done + 1
         else lines[#lines + 1] = "skip: " .. core.basename(c.path) .. ": " .. aerr end
       else
         lines[#lines + 1] = "skip: " .. core.basename(c.path) .. ": " ..
-          (err_map[c.path] or "unknown batch error")
+          (err_map[c.job_key] or "unknown batch error")
       end
     end
   end)
@@ -195,7 +203,7 @@ local function do_process()
   -- Inserted right after the "Processed N of M" summary above.
   local diag_lines = {}
   for _, c in ipairs(candidates) do
-    local payload = diag_map[c.path]
+    local payload = diag_map[c.job_key]
     local formatted = payload and core.format_diag(payload)
     if formatted then
       if #candidates > 1 then
