@@ -817,6 +817,107 @@ class TestProcessOnePipeline:
         assert "comb-filter" in captured.err
 
 
+class TestWidthOnlyFastPath:
+    """strength=tail_strength=0 ("width only") must skip recenter_bands'
+    STFT round trip entirely - not just take the identity-rotation path -
+    while collapse and align still apply normally. See
+    docks/TASK_incenter_ui_fixes.md item 2: this is why the width-only UI
+    path is a real fix to process_one, not just a slider convenience."""
+
+    def test_output_matches_direct_collapse_no_stft_artifacts(self, tmp_path):
+        sr = 48000
+        left = sine(300, sr, 1.0, amp=0.3)
+        right = sine(300, sr, 1.0, amp=0.1)
+        x = stereo(left, right)
+        info = ic.WavInfo(sr=sr, audio_fmt=1, bits=24, ch=2, extra_chunks=[])
+        in_path = tmp_path / "in.wav"
+        ic.write_wav(str(in_path), x, info)
+        out_path = tmp_path / "out.wav"
+
+        args = default_args(strength=0.0, tail_strength=0.0, collapse=0.5,
+                            align=False)
+        ic.process_one(str(in_path), str(out_path), args, verbose=False)
+
+        _, y, _ = ic.read_wav(str(out_path))
+        expected, _ = ic.collapse(x, 0.5)
+        # atol matched to 24-bit quantization only, since there's no STFT
+        # round trip to add its own reconstruction error on top.
+        np.testing.assert_allclose(y, expected, atol=2e-6)
+
+    def test_returns_none_diag_not_a_measurement(self, tmp_path):
+        sr = 48000
+        x = stereo(sine(300, sr, 0.3, amp=0.3), sine(300, sr, 0.3, amp=0.1))
+        info = ic.WavInfo(sr=sr, audio_fmt=1, bits=16, ch=2, extra_chunks=[])
+        in_path = tmp_path / "in.wav"
+        ic.write_wav(str(in_path), x, info)
+        out_path = tmp_path / "out.wav"
+        args = default_args(strength=0.0, tail_strength=0.0, collapse=0.5,
+                            align=True)
+        diag = ic.process_one(str(in_path), str(out_path), args, verbose=False)
+        assert diag is None
+
+    def test_verbose_reports_skipping_stft_not_measured_line(self, tmp_path, capsys):
+        sr = 48000
+        x = stereo(sine(300, sr, 0.2, amp=0.3), sine(300, sr, 0.2, amp=0.1))
+        info = ic.WavInfo(sr=sr, audio_fmt=1, bits=16, ch=2, extra_chunks=[])
+        in_path = tmp_path / "in.wav"
+        ic.write_wav(str(in_path), x, info)
+        out_path = tmp_path / "out.wav"
+        args = default_args(strength=0.0, tail_strength=0.0, collapse=0.5,
+                            align=False)
+        ic.process_one(str(in_path), str(out_path), args, verbose=True)
+        out = capsys.readouterr().out
+        assert "skipping the STFT round trip" in out
+        assert "measured:" not in out
+
+    def test_align_still_applies_in_width_only_mode(self, tmp_path):
+        sr = 48000
+        rng = np.random.default_rng(21)
+        base = rng.standard_normal(sr // 2) * 0.1
+        base = np.convolve(base, np.ones(8) / 8, mode="same")
+        shifted = ic.apply_delay(base, 4.0)
+        x = stereo(base, shifted)
+        info = ic.WavInfo(sr=sr, audio_fmt=1, bits=24, ch=2, extra_chunks=[])
+        in_path = tmp_path / "in.wav"
+        ic.write_wav(str(in_path), x, info)
+        out_path = tmp_path / "out.wav"
+
+        args = default_args(strength=0.0, tail_strength=0.0, collapse=0.0,
+                            align=True)
+        ic.process_one(str(in_path), str(out_path), args, verbose=False)
+
+        _, y, _ = ic.read_wav(str(out_path))
+        expected = ic.align(x, sr, verbose=False)
+        np.testing.assert_allclose(y, expected, atol=2e-6)
+
+    def test_nonzero_strength_still_runs_full_centering(self, tmp_path, capsys):
+        # Regression guard: the width-only fast path must not accidentally
+        # swallow the normal case.
+        sr = 48000
+        x = stereo(sine(300, sr, 0.3, amp=0.3), sine(300, sr, 0.3, amp=0.1))
+        info = ic.WavInfo(sr=sr, audio_fmt=1, bits=16, ch=2, extra_chunks=[])
+        in_path = tmp_path / "in.wav"
+        ic.write_wav(str(in_path), x, info)
+        out_path = tmp_path / "out.wav"
+        args = default_args(strength=1.0, tail_strength=0.0, collapse=0.0,
+                            align=False, win=512, n_bands=8)
+        diag = ic.process_one(str(in_path), str(out_path), args, verbose=True)
+        assert diag is not None
+        assert "skipping the STFT round trip" not in capsys.readouterr().out
+
+    def test_nonzero_tail_strength_alone_still_runs_full_centering(self, tmp_path):
+        sr = 48000
+        x = stereo(sine(300, sr, 0.3, amp=0.3), sine(300, sr, 0.3, amp=0.1))
+        info = ic.WavInfo(sr=sr, audio_fmt=1, bits=16, ch=2, extra_chunks=[])
+        in_path = tmp_path / "in.wav"
+        ic.write_wav(str(in_path), x, info)
+        out_path = tmp_path / "out.wav"
+        args = default_args(strength=0.0, tail_strength=1.0, collapse=0.0,
+                            align=False, win=512, n_bands=8)
+        diag = ic.process_one(str(in_path), str(out_path), args, verbose=False)
+        assert diag is not None
+
+
 class TestFinalizeAndWrite:
     def test_integer_output_is_normalized_on_overshoot(self, tmp_path):
         sr = 44100

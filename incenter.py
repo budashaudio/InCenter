@@ -657,9 +657,12 @@ def process_one(in_path, out_path, args, verbose, start=None, length=None):
     region is a per-line property, not a global one args can carry for an
     entire batch run.
 
-    Returns the diag dict from recenter_bands (see there), or None on the
-    bypass path - a bypass produces no measurement, and must never be
-    mistaken for a measurement of zero offset.
+    Returns the diag dict from recenter_bands (see there), or None
+    whenever no centering ran - the bypass path, or a request with no
+    centering effect (strength and tail_strength both 0, e.g. "width
+    only") even if align/collapse still apply. Either way, no centering
+    means no measurement, and that must never be mistaken for a
+    measurement of zero offset.
     """
     sr, x, info = read_wav(in_path)
     v = verbose
@@ -690,17 +693,30 @@ def process_one(in_path, out_path, args, verbose, start=None, length=None):
     if args.align:
         x = align(x, sr, verbose=v)
 
-    # Resolve the STFT window: explicit integer, or auto-detected from the
-    # useful sound length.
-    win = auto_win(x, sr, verbose=v) if args.win == "auto" else int(args.win)
+    # No centering requested (strength and tail_strength both 0 - e.g.
+    # "width only", with collapse and/or align still active): skip
+    # recenter_bands entirely rather than running a full STFT/ISTFT round
+    # trip to apply a rotation of exactly 0 degrees. Faster, and avoids
+    # reconstruction error where no correction happens anyway. Collapse,
+    # if requested, still applies below - it works directly on the
+    # time-domain signal and needs no STFT of its own.
+    needs_centering = args.strength != 0.0 or args.tail_strength not in (None, 0.0)
+    if needs_centering:
+        # Resolve the STFT window: explicit integer, or auto-detected from
+        # the useful sound length.
+        win = auto_win(x, sr, verbose=v) if args.win == "auto" else int(args.win)
 
-    y, diag = recenter_bands(x, sr, args.strength, n_bands=args.n_bands,
-                             nperseg=win,
-                             tail_strength=args.tail_strength, verbose=v)
-    if v:
-        print(f"measured: offset {diag['offset_deg']:+.2f}d "
-              f"(attack {diag['attack_deg']:.2f}d / tail {diag['tail_deg']:.2f}d), "
-              f"per-band spread {diag['spread_deg']:.2f}d, window {diag['win']}")
+        y, diag = recenter_bands(x, sr, args.strength, n_bands=args.n_bands,
+                                 nperseg=win,
+                                 tail_strength=args.tail_strength, verbose=v)
+        if v:
+            print(f"measured: offset {diag['offset_deg']:+.2f}d "
+                  f"(attack {diag['attack_deg']:.2f}d / tail {diag['tail_deg']:.2f}d), "
+                  f"per-band spread {diag['spread_deg']:.2f}d, window {diag['win']}")
+    else:
+        y, diag = x, None
+        if v:
+            print("width only: no centering requested, skipping the STFT round trip")
 
     # Width reduction comes last, on already-centred audio.
     if args.collapse > 0.0:
