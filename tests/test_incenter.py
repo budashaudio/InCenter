@@ -197,6 +197,284 @@ class TestEncodeInt:
         assert v[0] == -32768
 
 
+# --------------------------------------------------------------- item region
+
+class TestRewriteBextTimeReference:
+    def _bext(self, low, high, total_len=400):
+        """A minimal-but-plausible bext body with a Time Reference of
+        (low, high) at the correct BWF offset (338), padded to total_len."""
+        body = bytearray(total_len)
+        struct.pack_into("<II", body, 338, low, high)
+        return bytes(body)
+
+    def test_advances_low_word_only(self):
+        body = self._bext(low=1000, high=0)
+        out = ic._rewrite_bext_time_reference(body, added_samples=500)
+        low, high = struct.unpack_from("<II", out, 338)
+        assert (low, high) == (1500, 0)
+
+    def test_carries_into_high_word(self):
+        body = self._bext(low=0xFFFFFFF0, high=0)
+        out = ic._rewrite_bext_time_reference(body, added_samples=0x20)
+        low, high = struct.unpack_from("<II", out, 338)
+        assert low == 0x10
+        assert high == 1
+
+    def test_leaves_rest_of_chunk_untouched(self):
+        body = bytearray(b"X" * 400)
+        struct.pack_into("<II", body, 338, 1000, 0)
+        body = bytes(body)
+        out = ic._rewrite_bext_time_reference(body, added_samples=42)
+        assert out[:338] == body[:338]
+        assert out[346:] == body[346:]
+
+    def test_truncated_chunk_passes_through_unchanged(self):
+        short_body = b"too short to hold a time reference"
+        out = ic._rewrite_bext_time_reference(short_body, added_samples=999)
+        assert out == short_body
+
+    def test_zero_length_chunk_does_not_crash(self):
+        assert ic._rewrite_bext_time_reference(b"", added_samples=100) == b""
+
+
+class TestApplyRegion:
+    def _region_wav(self, sr=48000, dur=1.0, extra_chunks=None):
+        x = stereo(sine(300, sr, dur, amp=0.3), sine(300, sr, dur, amp=0.1))
+        info = ic.WavInfo(sr=sr, audio_fmt=1, bits=16, ch=2,
+                          extra_chunks=extra_chunks or [])
+        return x, info
+
+    def test_slices_to_the_requested_region(self):
+        sr = 48000
+        x, info = self._region_wav(sr=sr, dur=1.0)
+        x_region, _ = ic._apply_region(x, sr, info, start_sec=0.1,
+                                       length_sec=0.2, path="f.wav")
+        assert len(x_region) == round(0.2 * sr)
+        np.testing.assert_array_equal(
+            x_region, x[round(0.1 * sr):round(0.1 * sr) + round(0.2 * sr)])
+
+    def test_length_none_means_to_end_of_file(self):
+        sr = 48000
+        x, info = self._region_wav(sr=sr, dur=1.0)
+        x_region, _ = ic._apply_region(x, sr, info, start_sec=0.5,
+                                       length_sec=None, path="f.wav")
+        assert len(x_region) == len(x) - round(0.5 * sr)
+
+    def test_negative_start_clamps_to_zero(self):
+        sr = 48000
+        x, info = self._region_wav(sr=sr, dur=1.0)
+        x_region, _ = ic._apply_region(x, sr, info, start_sec=-5.0,
+                                       length_sec=0.3, path="f.wav")
+        np.testing.assert_array_equal(x_region, x[:round(0.3 * sr)])
+
+    def test_region_past_eof_truncates_not_errors(self):
+        sr = 48000
+        x, info = self._region_wav(sr=sr, dur=1.0)
+        # item legitimately extends past its source (REAPER draws silence)
+        x_region, _ = ic._apply_region(x, sr, info, start_sec=0.9,
+                                       length_sec=5.0, path="f.wav")
+        np.testing.assert_array_equal(x_region, x[round(0.9 * sr):])
+
+    def test_zero_length_region_raises(self):
+        sr = 48000
+        x, info = self._region_wav(sr=sr, dur=1.0)
+        with pytest.raises(ValueError, match="region too short to process"):
+            ic._apply_region(x, sr, info, start_sec=0.5, length_sec=0.0,
+                             path="f.wav")
+
+    def test_sub_minimum_length_region_raises(self):
+        sr = 48000
+        x, info = self._region_wav(sr=sr, dur=1.0)
+        tiny_sec = 500 / sr   # well under _MIN_REGION_SAMPLES (1024)
+        with pytest.raises(ValueError, match="region too short to process"):
+            ic._apply_region(x, sr, info, start_sec=0.5, length_sec=tiny_sec,
+                             path="f.wav")
+
+    def test_start_at_eof_raises_not_reads_out_of_range(self):
+        sr = 48000
+        x, info = self._region_wav(sr=sr, dur=1.0)
+        with pytest.raises(ValueError, match="region too short to process"):
+            ic._apply_region(x, sr, info, start_sec=10.0, length_sec=None,
+                             path="f.wav")
+
+    def test_rewrites_bext_when_start_is_nonzero(self):
+        sr = 48000
+        bext_body = bytearray(400)
+        struct.pack_into("<II", bext_body, 338, 1000, 0)
+        x, info = self._region_wav(sr=sr, dur=1.0,
+                                   extra_chunks=[(b"bext", bytes(bext_body))])
+        _, info_region = ic._apply_region(x, sr, info, start_sec=0.1,
+                                          length_sec=0.2, path="f.wav")
+        low, high = struct.unpack_from("<II", info_region.extra_chunks[0][1], 338)
+        assert (low, high) == (1000 + round(0.1 * sr), 0)
+
+    def test_leaves_bext_untouched_when_start_is_zero(self):
+        sr = 48000
+        bext_body = bytearray(400)
+        struct.pack_into("<II", bext_body, 338, 1000, 0)
+        x, info = self._region_wav(sr=sr, dur=1.0,
+                                   extra_chunks=[(b"bext", bytes(bext_body))])
+        _, info_region = ic._apply_region(x, sr, info, start_sec=0.0,
+                                          length_sec=0.2, path="f.wav")
+        assert info_region.extra_chunks[0][1] == bytes(bext_body)
+
+    def test_non_bext_chunks_pass_through_unchanged(self):
+        sr = 48000
+        x, info = self._region_wav(sr=sr, dur=1.0,
+                                   extra_chunks=[(b"iXML", b"<x/>")])
+        _, info_region = ic._apply_region(x, sr, info, start_sec=0.1,
+                                          length_sec=0.2, path="f.wav")
+        assert info_region.extra_chunks == [(b"iXML", b"<x/>")]
+
+
+class TestProcessOneRegion:
+    def test_output_length_equals_region_length(self, tmp_path):
+        sr = 48000
+        x = stereo(sine(300, sr, 1.0, amp=0.3), sine(300, sr, 1.0, amp=0.1))
+        info = ic.WavInfo(sr=sr, audio_fmt=1, bits=16, ch=2, extra_chunks=[])
+        in_path = tmp_path / "in.wav"
+        ic.write_wav(str(in_path), x, info)
+        out_path = tmp_path / "out.wav"
+
+        args = default_args(strength=1.0, tail_strength=1.0, win=256, n_bands=4)
+        ic.process_one(str(in_path), str(out_path), args, verbose=False,
+                       start=0.2, length=0.3)
+
+        _, y, _ = ic.read_wav(str(out_path))
+        assert len(y) == round(0.3 * sr)
+
+    def test_explicit_start_length_override_args(self, tmp_path):
+        # args.start/args.length are the single-file CLI path; process_one's
+        # own start=/length= (what --batch uses) must win when both are given.
+        sr = 48000
+        x = stereo(sine(300, sr, 1.0, amp=0.3), sine(300, sr, 1.0, amp=0.1))
+        info = ic.WavInfo(sr=sr, audio_fmt=1, bits=16, ch=2, extra_chunks=[])
+        in_path = tmp_path / "in.wav"
+        ic.write_wav(str(in_path), x, info)
+        out_path = tmp_path / "out.wav"
+
+        args = default_args(strength=0.0, tail_strength=0.0, collapse=0.0,
+                            align=False)
+        args.start, args.length = 0.9, 0.05   # would be "too short" if used
+        ic.process_one(str(in_path), str(out_path), args, verbose=False,
+                       start=0.1, length=0.4)
+
+        _, y, _ = ic.read_wav(str(out_path))
+        assert len(y) == round(0.4 * sr)
+
+    def test_whole_file_region_is_byte_identical_to_no_region(self, tmp_path):
+        sr = 48000
+        rng = np.random.default_rng(3)
+        n = sr  # exactly 1.0s, so start=0.0/length=1.0 round-trips exactly
+        left = 0.3 * np.sin(2 * np.pi * 300 * np.arange(n) / sr) + 0.02 * rng.standard_normal(n)
+        right = 0.15 * np.sin(2 * np.pi * 300 * np.arange(n) / sr) + 0.02 * rng.standard_normal(n)
+        x = stereo(left, right)
+        info = ic.WavInfo(sr=sr, audio_fmt=1, bits=24, ch=2, extra_chunks=[])
+        in_path = tmp_path / "in.wav"
+        ic.write_wav(str(in_path), x, info)
+
+        args = default_args(strength=1.0, tail_strength=0.7, collapse=0.2,
+                            align=True, win=512, n_bands=8)
+        out_no_region = tmp_path / "out_no_region.wav"
+        ic.process_one(str(in_path), str(out_no_region), args, verbose=False)
+
+        out_whole_region = tmp_path / "out_whole_region.wav"
+        ic.process_one(str(in_path), str(out_whole_region), args, verbose=False,
+                       start=0.0, length=n / sr)
+
+        assert out_no_region.read_bytes() == out_whole_region.read_bytes()
+
+
+class TestRunBatchRegion:
+    def _write_source(self, path, sr=48000, dur=1.0):
+        # A noise component, not a pure periodic tone, so two regions at
+        # different offsets are guaranteed to actually differ (a pure tone
+        # can repeat exactly at an offset that's a whole number of periods).
+        rng = np.random.default_rng(11)
+        n = int(sr * dur)
+        left = sine(300, sr, dur, amp=0.3) + 0.05 * rng.standard_normal(n)
+        right = sine(300, sr, dur, amp=0.1) + 0.05 * rng.standard_normal(n)
+        x = stereo(left, right)
+        info = ic.WavInfo(sr=sr, audio_fmt=1, bits=16, ch=2, extra_chunks=[])
+        ic.write_wav(str(path), x, info)
+        return sr
+
+    def test_four_field_manifest_line_parses(self, tmp_path, capsys):
+        sr = self._write_source(tmp_path / "in.wav")
+        in_path = tmp_path / "in.wav"
+        out_path = tmp_path / "out.wav"
+        manifest = tmp_path / "manifest.txt"
+        manifest.write_text(f"{in_path}\t{out_path}\t0.2\t0.3\n")
+
+        args = default_args(strength=0.0, tail_strength=0.0, collapse=0.0, align=False)
+        ic.run_batch(str(manifest), args, verbose=False)
+
+        assert f"##OK##\t{out_path}\t{in_path}" in capsys.readouterr().out
+        _, y, _ = ic.read_wav(str(out_path))
+        assert len(y) == round(0.3 * sr)
+
+    def test_four_field_manifest_empty_length_means_to_eof(self, tmp_path):
+        sr = self._write_source(tmp_path / "in.wav", dur=1.0)
+        in_path = tmp_path / "in.wav"
+        out_path = tmp_path / "out.wav"
+        manifest = tmp_path / "manifest.txt"
+        manifest.write_text(f"{in_path}\t{out_path}\t0.4\t\n")
+
+        args = default_args(strength=0.0, tail_strength=0.0, collapse=0.0, align=False)
+        ic.run_batch(str(manifest), args, verbose=False)
+
+        _, y, _ = ic.read_wav(str(out_path))
+        assert len(y) == round(1.0 * sr) - round(0.4 * sr)
+
+    def test_two_field_legacy_manifest_still_parses(self, tmp_path, capsys):
+        sr = self._write_source(tmp_path / "in.wav", dur=0.5)
+        in_path = tmp_path / "in.wav"
+        out_path = tmp_path / "out.wav"
+        manifest = tmp_path / "manifest.txt"
+        manifest.write_text(f"{in_path}\t{out_path}\n")
+
+        args = default_args(strength=0.0, tail_strength=0.0, collapse=0.0, align=False)
+        ic.run_batch(str(manifest), args, verbose=False)
+
+        assert f"##OK##\t{out_path}\t{in_path}" in capsys.readouterr().out
+        _, y, _ = ic.read_wav(str(out_path))
+        assert len(y) == round(0.5 * sr)   # whole file, as before this feature
+
+    def test_same_source_two_regions_produce_two_distinct_outputs(self, tmp_path):
+        # The dedup fix this feature depends on: two jobs from the same
+        # source file but different regions must not collide/overwrite -
+        # this is the radio-chatter case the feature exists for.
+        sr = self._write_source(tmp_path / "in.wav", dur=1.0)
+        in_path = tmp_path / "in.wav"
+        out_a = tmp_path / "out_a.wav"
+        out_b = tmp_path / "out_b.wav"
+        manifest = tmp_path / "manifest.txt"
+        manifest.write_text(
+            f"{in_path}\t{out_a}\t0.0\t0.3\n"
+            f"{in_path}\t{out_b}\t0.5\t0.3\n"
+        )
+
+        args = default_args(strength=0.0, tail_strength=0.0, collapse=0.0, align=False)
+        ic.run_batch(str(manifest), args, verbose=False)
+
+        assert out_a.exists() and out_b.exists()
+        _, ya, _ = ic.read_wav(str(out_a))
+        _, yb, _ = ic.read_wav(str(out_b))
+        assert len(ya) == round(0.3 * sr) == len(yb)
+        assert not np.array_equal(ya, yb)   # genuinely different regions
+
+    def test_malformed_start_length_reported_not_crashed(self, tmp_path):
+        in_path = tmp_path / "in.wav"
+        self._write_source(in_path)
+        manifest = tmp_path / "manifest.txt"
+        manifest.write_text(f"{in_path}\tout.wav\tnot_a_number\t0.3\n")
+
+        args = default_args()
+        ic.run_batch(str(manifest), args, verbose=False)
+        # must not raise; reported as a malformed line like any other
+        # parse failure, not as a Python traceback
+
+
 # --------------------------------------------------------------- analysis helpers
 
 class TestLoudestRegion:
@@ -581,7 +859,8 @@ class TestRunBatch:
         ic.run_batch(str(manifest), args, verbose=False)
 
         out = capsys.readouterr().out
-        assert f"##OK##\t{good_in}\t{good_out}" in out
+        # key is out_path (unique per job), not in_path
+        assert f"##OK##\t{good_out}\t{good_in}" in out
         assert out.count("##ERR##") == 1
         assert good_out.exists()
         # bypass (strength=tail_strength=collapse=0, align=False) makes no
@@ -611,7 +890,9 @@ class TestRunBatch:
         diag_line = out.splitlines()[out[:diag_idx].count("\n")]
         tag, path, payload = diag_line.split("\t")
         assert tag == "##DIAG##"
-        assert path == str(in_wav)
+        # key is out_path (unique per job), not in_path - two items trimmed
+        # from the same source to different regions need distinct keys.
+        assert path == str(out_wav)
         # same tab-delimited shape as ##OK##/##ERR##, key=value;... payload
         keys = dict(kv.split("=") for kv in payload.split(";"))
         assert set(keys) == {"offset", "attack", "tail", "spread", "win", "bands"}
