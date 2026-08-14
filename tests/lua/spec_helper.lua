@@ -31,6 +31,14 @@ local function new_reaper(overrides)
     end,
 
     GetProjectPathEx = function(_proj, _buf) return "" end,
+
+    -- Item/take value getters and setters used by get_item_region and
+    -- apply_result. Overridable per-test; these are just no-op/neutral
+    -- defaults so specs that don't care about them don't have to stub
+    -- every one.
+    GetMediaItemTakeInfo_Value = function(_take, _param) return 0.0 end,
+    GetMediaItemInfo_Value = function(_item, _param) return 0.0 end,
+    SetMediaItemTakeInfo_Value = function(_take, _param, _value) end,
   }
 
   for k, v in pairs(overrides or {}) do r[k] = v end

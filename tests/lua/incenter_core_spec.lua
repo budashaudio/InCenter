@@ -296,6 +296,19 @@ describe("incenter_core", function()
       local second = core.make_out_path("/src/take.wav", tmp_dir, "120000")
       assert.equal(tmp_dir .. "take_centered_120000_2.wav", second)
     end)
+
+    it("dedupes against `allocated`, not just files that exist on disk", function()
+      -- Two jobs from the same source in one run both compute their
+      -- out_path before either has actually been written, so a disk
+      -- check alone can't tell them apart - this is what a caller with
+      -- multiple regions from one source file needs.
+      local allocated = {}
+      local first = core.make_out_path("/src/take.wav", tmp_dir, "120000", allocated)
+      allocated[first] = true
+      local second = core.make_out_path("/src/take.wav", tmp_dir, "120000", allocated)
+      assert.is_not.equal(first, second)
+      assert.equal(tmp_dir .. "take_centered_120000_2.wav", second)
+    end)
   end)
 
   describe("find_python", function()
@@ -473,6 +486,80 @@ describe("incenter_core", function()
     end)
   end)
 
+  describe("get_item_region", function()
+    local function core_with(values)
+      return load_core({
+        GetMediaItemTakeInfo_Value = function(_take, param) return values[param] end,
+        GetMediaItemInfo_Value = function(_item, param) return values[param] end,
+      })
+    end
+
+    it("returns D_STARTOFFS as-is and D_LENGTH*D_PLAYRATE as the region length", function()
+      local core = core_with({
+        D_STARTOFFS = 12.5, D_LENGTH = 3.0, D_PLAYRATE = 1.0,
+      })
+      local start_sec, length_sec = core.get_item_region({}, {})
+      assert.equal(12.5, start_sec)
+      assert.equal(3.0, length_sec)
+    end)
+
+    it("scales length by a non-1.0 playrate - the part that's wrong if skipped", function()
+      -- A 2x playrate item spanning 1s of timeline covers 2s of source;
+      -- using D_LENGTH alone here would silently give the wrong region.
+      local core = core_with({
+        D_STARTOFFS = 0.0, D_LENGTH = 1.0, D_PLAYRATE = 2.0,
+      })
+      local _start_sec, length_sec = core.get_item_region({}, {})
+      assert.equal(2.0, length_sec)
+    end)
+
+    it("scales length by a fractional (slower) playrate too", function()
+      local core = core_with({
+        D_STARTOFFS = 0.0, D_LENGTH = 1.0, D_PLAYRATE = 0.5,
+      })
+      local _start_sec, length_sec = core.get_item_region({}, {})
+      assert.equal(0.5, length_sec)
+    end)
+
+    it("clamps a negative D_STARTOFFS to 0 defensively", function()
+      local core = core_with({
+        D_STARTOFFS = -2.0, D_LENGTH = 1.0, D_PLAYRATE = 1.0,
+      })
+      local start_sec = core.get_item_region({}, {})
+      assert.equal(0.0, start_sec)
+    end)
+
+    it("treats a non-positive playrate as 1.0 defensively", function()
+      local core = core_with({
+        D_STARTOFFS = 0.0, D_LENGTH = 4.0, D_PLAYRATE = 0.0,
+      })
+      local _start_sec, length_sec = core.get_item_region({}, {})
+      assert.equal(4.0, length_sec)
+    end)
+  end)
+
+  describe("make_job_key", function()
+    local core = load_core()
+
+    it("is stable for identical inputs", function()
+      assert.equal(
+        core.make_job_key("/a.wav", 1.0, 2.0),
+        core.make_job_key("/a.wav", 1.0, 2.0))
+    end)
+
+    it("differs when the region differs, same source", function()
+      assert.is_not.equal(
+        core.make_job_key("/a.wav", 0.0, 1.0),
+        core.make_job_key("/a.wav", 5.0, 1.0))
+    end)
+
+    it("differs when the source differs, same region", function()
+      assert.is_not.equal(
+        core.make_job_key("/a.wav", 0.0, 1.0),
+        core.make_job_key("/b.wav", 0.0, 1.0))
+    end)
+  end)
+
   describe("apply_result", function()
     it("fails when the item no longer validates", function()
       local core = load_core({
@@ -522,6 +609,10 @@ describe("incenter_core", function()
           calls.name_field = field
           calls.name_value = value
         end,
+        SetMediaItemTakeInfo_Value = function(_take, param, value)
+          calls.value_param = param
+          calls.value_value = value
+        end,
         UpdateItemInProject = function(_item)
           calls.updated = true
         end,
@@ -532,6 +623,10 @@ describe("incenter_core", function()
       assert.same({ tag = "new_source" }, calls.set_source)
       assert.equal("P_NAME", calls.name_field)
       assert.equal("take_centered_120000.wav", calls.name_value)
+      -- the part that breaks silently if missed: the new file's sample 0
+      -- IS the region's start, so the old D_STARTOFFS must be reset.
+      assert.equal("D_STARTOFFS", calls.value_param)
+      assert.equal(0.0, calls.value_value)
       assert.is_true(calls.updated)
     end)
   end)
@@ -598,87 +693,136 @@ describe("incenter_core", function()
   end)
 
   describe("run_batch", function()
-    local function paths_set(list)
-      local s = {}
-      for _, p in ipairs(list) do s[p] = true end
-      return s
+    -- A realistic run_worker stand-in: reads the manifest core.run_batch
+    -- actually wrote and echoes an ##OK## line per entry, using whatever
+    -- out_path core.make_out_path really generated - so tests exercise
+    -- the real dedup logic instead of a hardcoded filename.
+    local function echo_ok_worker(args, _timeout)
+      local manifest_path = args[4]
+      local mf = io.open(manifest_path, "r")
+      local out_lines = {}
+      for line in mf:lines() do
+        local in_path, out_path = line:match("^([^\t]+)\t([^\t]+)")
+        table.insert(out_lines, "##OK##\t" .. out_path .. "\t" .. in_path)
+      end
+      mf:close()
+      return true, table.concat(out_lines, "\n")
     end
 
-    it("maps a successful worker run's OK/ERR lines back to each path", function()
+    it("maps a successful worker run's OK/ERR lines back by job_key", function()
       local core = load_core()
-      core.run_worker = function(_args, _timeout)
-        return true, table.concat({
-          "##OK##\t/a.wav\t/a_centered_120000.wav",
-          "##ERR##\t/b.wav\tsomething broke",
-        }, "\n")
+      local key_a = core.make_job_key("/a.wav", 0.0, 1.0)
+      local key_b = core.make_job_key("/b.wav", 0.0, 1.0)
+      core.run_worker = function(args, _timeout)
+        local mf = io.open(args[4], "r")
+        local out_lines = {}
+        for line in mf:lines() do
+          local in_path, out_path = line:match("^([^\t]+)\t([^\t]+)")
+          if in_path == "/a.wav" then
+            table.insert(out_lines, "##OK##\t" .. out_path .. "\t" .. in_path)
+          else
+            table.insert(out_lines, "##ERR##\t" .. out_path .. "\tsomething broke")
+          end
+        end
+        mf:close()
+        return true, table.concat(out_lines, "\n")
       end
 
+      local jobs = {
+        [key_a] = { src_path = "/a.wav", start_sec = 0.0, length_sec = 1.0 },
+        [key_b] = { src_path = "/b.wav", start_sec = 0.0, length_sec = 1.0 },
+      }
       local ok_map, err_map = core.run_batch(
-        "/usr/bin/python3", "/dsp/incenter.py",
-        paths_set({ "/a.wav", "/b.wav" }),
+        "/usr/bin/python3", "/dsp/incenter.py", jobs,
         { strength = 1.0, tail_strength = 1.0, align = false, verbose = false },
         "/out/"
       )
-      assert.equal("/a_centered_120000.wav", ok_map["/a.wav"])
-      assert.equal("something broke", err_map["/b.wav"])
+      assert.truthy(ok_map[key_a])
+      assert.truthy(ok_map[key_a]:match("%.wav$"))
+      assert.equal("something broke", err_map[key_b])
     end)
 
-    it("marks paths missing from the output as failed, not silently dropped", function()
+    it("marks jobs missing from the output as failed, not silently dropped", function()
       local core = load_core()
-      core.run_worker = function(_args, _timeout)
-        return true, "##OK##\t/a.wav\t/a_centered_120000.wav"
+      local key_a = core.make_job_key("/a.wav", 0.0, 1.0)
+      local key_vanished = core.make_job_key("/vanished.wav", 0.0, 1.0)
+      core.run_worker = function(args, _timeout)
+        local mf = io.open(args[4], "r")
+        local out_lines = {}
+        for line in mf:lines() do
+          local in_path, out_path = line:match("^([^\t]+)\t([^\t]+)")
+          if in_path == "/a.wav" then
+            table.insert(out_lines, "##OK##\t" .. out_path .. "\t" .. in_path)
+          end
+          -- /vanished.wav gets no line - simulates a worker killed mid-batch
+        end
+        mf:close()
+        return true, table.concat(out_lines, "\n")
       end
 
+      local jobs = {
+        [key_a] = { src_path = "/a.wav", start_sec = 0.0, length_sec = 1.0 },
+        [key_vanished] = { src_path = "/vanished.wav", start_sec = 0.0, length_sec = 1.0 },
+      }
       local ok_map, err_map = core.run_batch(
-        "/usr/bin/python3", "/dsp/incenter.py",
-        paths_set({ "/a.wav", "/vanished.wav" }),
+        "/usr/bin/python3", "/dsp/incenter.py", jobs,
         { strength = 1.0, tail_strength = 1.0, align = false, verbose = false },
         "/out/"
       )
-      assert.equal("/a_centered_120000.wav", ok_map["/a.wav"])
-      assert.truthy(err_map["/vanished.wav"]:match("no result reported"))
+      assert.truthy(ok_map[key_a])
+      assert.truthy(err_map[key_vanished]:match("no result reported"))
     end)
 
-    it("fails every path and clears the python cache when the worker itself fails", function()
+    it("fails every job and clears the python cache when the worker itself fails", function()
       local core = load_core()
       _G.reaper.SetExtState("incenter", "python_path", "/usr/bin/python3")
       core.run_worker = function(_args, _timeout)
         return false, "traceback...\nModuleNotFoundError: no module named 'scipy'"
       end
 
+      local key_a = core.make_job_key("/a.wav", 0.0, 1.0)
+      local key_b = core.make_job_key("/b.wav", 0.0, 1.0)
+      local jobs = {
+        [key_a] = { src_path = "/a.wav", start_sec = 0.0, length_sec = 1.0 },
+        [key_b] = { src_path = "/b.wav", start_sec = 0.0, length_sec = 1.0 },
+      }
       local ok_map, err_map = core.run_batch(
-        "/usr/bin/python3", "/dsp/incenter.py",
-        paths_set({ "/a.wav", "/b.wav" }),
+        "/usr/bin/python3", "/dsp/incenter.py", jobs,
         { strength = 1.0, tail_strength = 1.0, align = false, verbose = false },
         "/out/"
       )
       assert.same({}, ok_map)
-      assert.truthy(err_map["/a.wav"]:match("ModuleNotFoundError"))
-      assert.truthy(err_map["/b.wav"]:match("ModuleNotFoundError"))
+      assert.truthy(err_map[key_a]:match("ModuleNotFoundError"))
+      assert.truthy(err_map[key_b]:match("ModuleNotFoundError"))
       assert.equal("", _G.reaper.GetExtState("incenter", "python_path"))
     end)
 
-    it("exposes diag_map as a 4th return value, keeping the first three unchanged", function()
+    it("exposes diag_map as a 4th return value, keyed by job_key", function()
       local core = load_core()
-      core.run_worker = function(_args, _timeout)
+      local key_a = core.make_job_key("/a.wav", 0.0, 1.0)
+      core.run_worker = function(args, _timeout)
+        local mf = io.open(args[4], "r")
+        local in_path, out_path = mf:read("*l"):match("^([^\t]+)\t([^\t]+)")
+        mf:close()
         return true, table.concat({
-          "##DIAG##\t/a.wav\toffset=+3.24;attack=48.24;tail=44.10;spread=6.80;win=2048;bands=24",
-          "##OK##\t/a.wav\t/a_centered_120000.wav",
+          "##DIAG##\t" .. out_path ..
+            "\toffset=+3.24;attack=48.24;tail=44.10;spread=6.80;win=2048;bands=24",
+          "##OK##\t" .. out_path .. "\t" .. in_path,
         }, "\n")
       end
 
+      local jobs = { [key_a] = { src_path = "/a.wav", start_sec = 0.0, length_sec = 1.0 } }
       local ok_map, err_map, output, diag_map = core.run_batch(
-        "/usr/bin/python3", "/dsp/incenter.py",
-        paths_set({ "/a.wav" }),
+        "/usr/bin/python3", "/dsp/incenter.py", jobs,
         { strength = 1.0, tail_strength = 1.0, align = false, verbose = false },
         "/out/"
       )
-      assert.equal("/a_centered_120000.wav", ok_map["/a.wav"])
+      assert.truthy(ok_map[key_a])
       assert.same({}, err_map)
       assert.is_string(output)
       assert.equal(
         "offset=+3.24;attack=48.24;tail=44.10;spread=6.80;win=2048;bands=24",
-        diag_map["/a.wav"])
+        diag_map[key_a])
     end)
 
     it("still returns a (possibly empty) diag_map when the worker fails", function()
@@ -686,13 +830,59 @@ describe("incenter_core", function()
       core.run_worker = function(_args, _timeout)
         return false, "boom"
       end
+      local key_a = core.make_job_key("/a.wav", 0.0, 1.0)
+      local jobs = { [key_a] = { src_path = "/a.wav", start_sec = 0.0, length_sec = 1.0 } }
       local _ok, _err, _output, diag_map = core.run_batch(
-        "/usr/bin/python3", "/dsp/incenter.py",
-        paths_set({ "/a.wav" }),
+        "/usr/bin/python3", "/dsp/incenter.py", jobs,
         { strength = 1.0, tail_strength = 1.0, align = false, verbose = false },
         "/out/"
       )
       assert.same({}, diag_map)
+    end)
+
+    it("writes 4-field manifest lines carrying the job's region", function()
+      local core = load_core()
+      local captured
+      core.run_worker = function(args, _timeout)
+        local mf = io.open(args[4], "r")
+        captured = mf:read("*a")
+        mf:close()
+        return true, ""
+      end
+      local key_a = core.make_job_key("/a.wav", 1.5, 3.25)
+      local jobs = { [key_a] = { src_path = "/a.wav", start_sec = 1.5, length_sec = 3.25 } }
+      core.run_batch(
+        "/usr/bin/python3", "/dsp/incenter.py", jobs,
+        { strength = 1.0, tail_strength = 1.0, align = false, verbose = false },
+        "/out/"
+      )
+      local in_path, _out_path, start_str, length_str =
+        captured:match("^([^\t]+)\t([^\t]+)\t([^\t]+)\t([^\n]+)")
+      assert.equal("/a.wav", in_path)
+      assert.equal("1.5", start_str)
+      assert.equal("3.25", length_str)
+    end)
+
+    it("two jobs sharing a source but different regions get distinct output paths", function()
+      -- The dedup fix this whole feature depends on: without it, the
+      -- second region would silently receive the first one's output.
+      local core = load_core()
+      core.run_worker = echo_ok_worker
+
+      local key_a = core.make_job_key("/same.wav", 0.0, 1.0)
+      local key_b = core.make_job_key("/same.wav", 5.0, 1.0)
+      local jobs = {
+        [key_a] = { src_path = "/same.wav", start_sec = 0.0, length_sec = 1.0 },
+        [key_b] = { src_path = "/same.wav", start_sec = 5.0, length_sec = 1.0 },
+      }
+      local ok_map = core.run_batch(
+        "/usr/bin/python3", "/dsp/incenter.py", jobs,
+        { strength = 1.0, tail_strength = 1.0, align = false, verbose = false },
+        "/out/"
+      )
+      assert.truthy(ok_map[key_a])
+      assert.truthy(ok_map[key_b])
+      assert.is_not.equal(ok_map[key_a], ok_map[key_b])
     end)
   end)
 

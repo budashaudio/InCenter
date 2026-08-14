@@ -232,6 +232,83 @@ def write_wav(path, x, info, force_float32=False):
     return audio_fmt, bits
 
 
+# ---------------------------------------------------------------- item region
+#
+# A long source file can hold several separate events at different stereo
+# positions (e.g. radio chatter). Processing the whole file averages the
+# angle across all of them, so trimming an item to one event and pressing
+# Process previously did nothing - the one line the user selected was
+# drowned in the file-wide average. --start/--length (seconds) let a
+# caller (the REAPER front-ends, or the CLI directly) process only the
+# item's region: read, correct, and write only that slice, independent of
+# whatever else is in the source file.
+
+_MIN_REGION_SAMPLES = 1024   # ~21ms at 48kHz; below this there's nothing to analyze
+
+
+def _rewrite_bext_time_reference(body, added_samples):
+    """Advances a bext chunk's Time Reference (BWF spec: a 64-bit sample
+    count at byte offset 338 in the chunk body, low 32 bits then high 32
+    bits, both little-endian) by added_samples.
+
+    A region cut from partway through a file starts later than the
+    original did, so the old time reference would place the corrected
+    clip at the wrong point on a BWF-aware timeline - exactly the
+    property carrying metadata through was meant to protect. Returns the
+    body unchanged if it's too short to safely contain the field (a
+    truncated/nonstandard bext must pass through, not crash).
+    """
+    OFFSET = 338
+    if len(body) < OFFSET + 8:
+        return body
+    low, high = struct.unpack_from("<II", body, OFFSET)
+    original = low | (high << 32)
+    new_ref = (original + added_samples) & 0xFFFFFFFFFFFFFFFF
+    out = bytearray(body)
+    struct.pack_into("<II", out, OFFSET,
+                     new_ref & 0xFFFFFFFF, (new_ref >> 32) & 0xFFFFFFFF)
+    return bytes(out)
+
+
+def _apply_region(x, sr, info, start_sec, length_sec, path):
+    """Slices x to the requested region (seconds) and, if the region
+    doesn't start at sample 0, rewrites the bext time reference to match.
+    Returns (x_region, info_region).
+
+    Defensive: a negative start clamps to 0; a region extending past
+    end-of-file truncates to the file's actual length rather than
+    reading out of range - an item can legitimately extend past its
+    source (REAPER draws silence there), so this must never error, only
+    truncate. Raises ValueError if the resulting region is empty or
+    shorter than _MIN_REGION_SAMPLES.
+    """
+    n = len(x)
+    start_samp = min(int(round(max(0.0, start_sec) * sr)), n)
+    if length_sec is None:
+        end_samp = n
+    else:
+        end_samp = start_samp + int(round(max(0.0, length_sec) * sr))
+    end_samp = min(end_samp, n)
+
+    if end_samp - start_samp < _MIN_REGION_SAMPLES:
+        raise ValueError(
+            f"{path}: region too short to process "
+            f"({end_samp - start_samp} samples, need at least {_MIN_REGION_SAMPLES})")
+
+    x_region = x[start_samp:end_samp]
+
+    extra_chunks = info.extra_chunks
+    if start_samp > 0:
+        extra_chunks = [
+            (cid, _rewrite_bext_time_reference(cbody, start_samp))
+            if cid == b"bext" else (cid, cbody)
+            for cid, cbody in extra_chunks
+        ]
+    info_region = WavInfo(sr=info.sr, audio_fmt=info.audio_fmt, bits=info.bits,
+                          ch=info.ch, extra_chunks=extra_chunks)
+    return x_region, info_region
+
+
 # ---------------------------------------------------------------- analysis helpers
 
 def loudest_region(x, sr, win_sec=3.0):
@@ -567,17 +644,33 @@ def _is_bypass(args):
             and not args.align)
 
 
-def process_one(in_path, out_path, args, verbose):
+def process_one(in_path, out_path, args, verbose, start=None, length=None):
     """Run the full pipeline (align -> recenter -> collapse -> normalize ->
     write) for a single file. Raises ValueError on bad input, same as
     read_wav always has.
 
-    Returns the diag dict from recenter_bands (see there), or None on the
-    bypass path - a bypass produces no measurement, and must never be
-    mistaken for a measurement of zero offset.
+    start/length (seconds) restrict processing to a region of the source -
+    see _apply_region. When both are omitted/default (start None or 0.0,
+    length None), falls back to args.start/args.length; if those are also
+    absent or default, the whole file is processed exactly as before this
+    existed. Explicit start/length here are what --batch uses, since a
+    region is a per-line property, not a global one args can carry for an
+    entire batch run.
+
+    Returns the diag dict from recenter_bands (see there), or None
+    whenever no centering ran - the bypass path, or a request with no
+    centering effect (strength and tail_strength both 0, e.g. "width
+    only") even if align/collapse still apply. Either way, no centering
+    means no measurement, and that must never be mistaken for a
+    measurement of zero offset.
     """
     sr, x, info = read_wav(in_path)
     v = verbose
+
+    start_sec = start if start is not None else getattr(args, "start", 0.0) or 0.0
+    length_sec = length if length is not None else getattr(args, "length", None)
+    if start_sec > 0.0 or length_sec is not None:
+        x, info = _apply_region(x, sr, info, start_sec, length_sec, in_path)
 
     if v:
         fmt_name = "float" if info.audio_fmt == 3 else "PCM"
@@ -600,17 +693,30 @@ def process_one(in_path, out_path, args, verbose):
     if args.align:
         x = align(x, sr, verbose=v)
 
-    # Resolve the STFT window: explicit integer, or auto-detected from the
-    # useful sound length.
-    win = auto_win(x, sr, verbose=v) if args.win == "auto" else int(args.win)
+    # No centering requested (strength and tail_strength both 0 - e.g.
+    # "width only", with collapse and/or align still active): skip
+    # recenter_bands entirely rather than running a full STFT/ISTFT round
+    # trip to apply a rotation of exactly 0 degrees. Faster, and avoids
+    # reconstruction error where no correction happens anyway. Collapse,
+    # if requested, still applies below - it works directly on the
+    # time-domain signal and needs no STFT of its own.
+    needs_centering = args.strength != 0.0 or args.tail_strength not in (None, 0.0)
+    if needs_centering:
+        # Resolve the STFT window: explicit integer, or auto-detected from
+        # the useful sound length.
+        win = auto_win(x, sr, verbose=v) if args.win == "auto" else int(args.win)
 
-    y, diag = recenter_bands(x, sr, args.strength, n_bands=args.n_bands,
-                             nperseg=win,
-                             tail_strength=args.tail_strength, verbose=v)
-    if v:
-        print(f"measured: offset {diag['offset_deg']:+.2f}d "
-              f"(attack {diag['attack_deg']:.2f}d / tail {diag['tail_deg']:.2f}d), "
-              f"per-band spread {diag['spread_deg']:.2f}d, window {diag['win']}")
+        y, diag = recenter_bands(x, sr, args.strength, n_bands=args.n_bands,
+                                 nperseg=win,
+                                 tail_strength=args.tail_strength, verbose=v)
+        if v:
+            print(f"measured: offset {diag['offset_deg']:+.2f}d "
+                  f"(attack {diag['attack_deg']:.2f}d / tail {diag['tail_deg']:.2f}d), "
+                  f"per-band spread {diag['spread_deg']:.2f}d, window {diag['win']}")
+    else:
+        y, diag = x, None
+        if v:
+            print("width only: no centering requested, skipping the STFT round trip")
 
     # Width reduction comes last, on already-centred audio.
     if args.collapse > 0.0:
@@ -662,25 +768,48 @@ def _finalize_and_write(out_path, y, info, args, v):
 
 
 def run_batch(manifest_path, args, verbose):
-    """Process every 'in_path<TAB>out_path' line in the manifest within
-    this single process. This is the point of --batch: scipy/numpy import
-    is the dominant fixed cost per process launch (roughly 2s regardless
-    of file length), so processing N files in one launch instead of N
-    launches turns that Nx cost into a 1x cost. Per-file outcome is
-    printed with a ##OK##/##ERR## prefix so a caller (e.g. the REAPER
-    Lua side) can parse results even with --verbose chatter interleaved.
+    """Process every line in the manifest within this single process. This
+    is the point of --batch: scipy/numpy import is the dominant fixed cost
+    per process launch (roughly 2s regardless of file length), so
+    processing N files in one launch instead of N launches turns that Nx
+    cost into a 1x cost. Per-line outcome is printed with a ##OK##/##ERR##
+    prefix so a caller (e.g. the REAPER Lua side) can parse results even
+    with --verbose chatter interleaved.
+
+    Each line is 'in_path<TAB>out_path' (start=0.0, length=to end of file)
+    or 'in_path<TAB>out_path<TAB>start<TAB>length' (both seconds; an empty
+    length field means to end of file), so two items trimmed from the same
+    source to different regions are two distinct jobs, not a duplicate.
+    The 2-field form is still accepted so older callers don't break.
+
+    The key printed in ##OK##/##ERR##/##DIAG## is out_path, not in_path:
+    unlike in_path, out_path is guaranteed unique per job (the caller must
+    give every job its own output path), so it's what a caller with
+    multiple regions from the same source file needs to tell its jobs
+    apart.
     """
     with open(manifest_path, "r", encoding="utf-8") as f:
-        pairs = [line.rstrip("\n").split("\t") for line in f if line.strip()]
+        lines = [line.rstrip("\n").split("\t") for line in f if line.strip()]
 
     ok_count = 0
-    for line_no, parts in enumerate(pairs, 1):
-        if len(parts) != 2:
+    for line_no, parts in enumerate(lines, 1):
+        start_sec, length_sec = 0.0, None
+        if len(parts) == 2:
+            in_path, out_path = parts
+        elif len(parts) == 4:
+            in_path, out_path, start_str, length_str = parts
+            try:
+                start_sec = float(start_str)
+                length_sec = float(length_str) if length_str != "" else None
+            except ValueError:
+                print(f"##ERR##\t(line {line_no})\tmalformed manifest line")
+                continue
+        else:
             print(f"##ERR##\t(line {line_no})\tmalformed manifest line")
             continue
-        in_path, out_path = parts
         try:
-            diag = process_one(in_path, out_path, args, verbose)
+            diag = process_one(in_path, out_path, args, verbose,
+                               start=start_sec, length=length_sec)
             if diag is not None:
                 payload = (
                     f"offset={diag['offset_deg']:+.2f};"
@@ -692,11 +821,11 @@ def run_batch(manifest_path, args, verbose):
                 )
                 # Machine channel the Lua side parses - always printed,
                 # regardless of --quiet (which only suppresses human chatter).
-                print(f"##DIAG##\t{in_path}\t{payload}")
-            print(f"##OK##\t{in_path}\t{out_path}")
+                print(f"##DIAG##\t{out_path}\t{payload}")
+            print(f"##OK##\t{out_path}\t{in_path}")
             ok_count += 1
         except Exception as e:
-            print(f"##ERR##\t{in_path}\t{e}")
+            print(f"##ERR##\t{out_path}\t{e}")
 
     if verbose:
         print(f"batch done: {ok_count}/{len(pairs)} file(s) ok")
@@ -733,6 +862,13 @@ def main():
     ap.add_argument("--win", default="auto",
                     help="STFT window size in samples, or 'auto' (default) to "
                          "pick it from the detected sound length")
+    ap.add_argument("--start", type=float, default=0.0,
+                    help="start of the region to process, in seconds "
+                         "(default: 0.0 = start of file). Ignored with --batch, "
+                         "where start/length are per manifest line instead")
+    ap.add_argument("--length", type=float, default=None,
+                    help="length of the region to process, in seconds "
+                         "(default: to end of file). Ignored with --batch")
     ap.add_argument("--quiet", action="store_true")
     args = ap.parse_args()
     v = not args.quiet

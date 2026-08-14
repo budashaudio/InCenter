@@ -22,6 +22,7 @@ local TAIL_STRENGTH = 1.0     -- 0 = leave tails untouched, 1 = correct like att
 local COLLAPSE      = 0.0     -- stereo width, applied last: 0 = untouched, 1 = mono
 local ALIGN         = true
 local WIN           = "auto"  -- "auto", or a number (512/1024/2048/4096)
+local WIDTH_ONLY    = false   -- true = force STRENGTH/TAIL_STRENGTH to 0 (width-only, faster: no STFT)
 local VERBOSE       = true
 
 -- If auto-detection can't find your python3 (the one with numpy+scipy),
@@ -69,16 +70,24 @@ local function main()
     return
   end
 
-  -- Phase 1: validate every selected item, collect unique source files.
-  local candidates, paths, skip_lines = {}, {}, {}
+  -- Phase 1: validate every selected item, collect distinct jobs. Each
+  -- candidate is keyed by job_key (source + region), not by source path
+  -- alone: two items trimmed from the same source to different regions
+  -- are two different jobs, and must not collapse into one (the second
+  -- would otherwise silently receive the first one's output - the
+  -- radio-chatter case this whole feature exists for).
+  local candidates, jobs, skip_lines = {}, {}, {}
   for i = 0, n_sel - 1 do
     local item = reaper.GetSelectedMediaItem(0, i)
     local take, path, err = core.validate_item(item)
     if err then
       table.insert(skip_lines, "skip: " .. err)
     else
-      table.insert(candidates, { item = item, take = take, path = path })
-      paths[path] = true
+      local start_sec, length_sec = core.get_item_region(item, take)
+      local job_key = core.make_job_key(path, start_sec, length_sec)
+      table.insert(candidates, { item = item, take = take, path = path,
+                                 job_key = job_key })
+      jobs[job_key] = { src_path = path, start_sec = start_sec, length_sec = length_sec }
     end
   end
 
@@ -88,23 +97,25 @@ local function main()
     return
   end
 
-  local n_paths = 0
-  for _ in pairs(paths) do n_paths = n_paths + 1 end
+  local n_jobs = 0
+  for _ in pairs(jobs) do n_jobs = n_jobs + 1 end
 
   -- Output goes to the project media folder, falling back to the source's
   -- own folder when the project isn't saved. All corrected files from one
   -- run share the same output directory (decided from the first source).
   local out_dir, used_project = core.output_dir(candidates[1].path)
-  msg(string.format("InCenter: processing %d file(s) for %d item(s) -> %s%s",
-    n_paths, #candidates, out_dir,
+  msg(string.format("InCenter: processing %d region(s) for %d item(s) -> %s%s",
+    n_jobs, #candidates, out_dir,
     used_project and "  (project media folder)" or "  (next to source)"))
 
   -- Phase 2: one process launch for the whole batch.
   local opts = {
-    strength = STRENGTH, tail_strength = TAIL_STRENGTH, collapse = COLLAPSE,
+    strength = WIDTH_ONLY and 0.0 or STRENGTH,
+    tail_strength = WIDTH_ONLY and 0.0 or TAIL_STRENGTH,
+    collapse = COLLAPSE,
     align = ALIGN, win = WIN, verbose = VERBOSE,
   }
-  local ok_map, err_map, output, diag_map = core.run_batch(python, dsp, paths, opts, out_dir)
+  local ok_map, err_map, output, diag_map = core.run_batch(python, dsp, jobs, opts, out_dir)
   diag_map = diag_map or {}
 
   if VERBOSE and output and output:match("%S") then
@@ -119,12 +130,12 @@ local function main()
   local done = 0
   local apply_ok, apply_err = pcall(function()
     for _, c in ipairs(candidates) do
-      local out_path = ok_map[c.path]
+      local out_path = ok_map[c.job_key]
       if out_path then
         local applied, aerr = core.apply_result(c.item, c.take, out_path)
         if applied then
           msg("ok: " .. core.basename(c.path) .. " -> " .. core.basename(out_path))
-          local payload = diag_map[c.path]
+          local payload = diag_map[c.job_key]
           local formatted = payload and core.format_diag(payload)
           if formatted then msg("   " .. formatted) end
           done = done + 1
@@ -133,7 +144,7 @@ local function main()
         end
       else
         table.insert(skip_lines, "skip: " .. core.basename(c.path) .. ": " ..
-          (err_map[c.path] or "unknown batch error"))
+          (err_map[c.job_key] or "unknown batch error"))
       end
     end
   end)

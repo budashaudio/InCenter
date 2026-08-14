@@ -96,14 +96,18 @@ end
 
 local strength      = load_num("strength", 1.0)
 local tail_strength = load_num("tail_strength", 1.0)
-local collapse      = load_num("collapse", 0.0)
+-- Stereo Width and "Width only" are NOT persisted, unlike everything else
+-- on this panel: occasional-use settings Nikita has been forgetting were
+-- left on from a previous session, causing unexpected results next time.
+-- Both always start at their default, regardless of ExtState.
+local collapse      = 0.0
 local win_idx       = math.floor(load_num("win_idx", 0))   -- 0 = Auto
 local align         = load_bool("align", true)
+local width_only    = false
 
 local function save_settings()
   reaper.SetExtState(EXT_SECTION, "strength", tostring(strength), true)
   reaper.SetExtState(EXT_SECTION, "tail_strength", tostring(tail_strength), true)
-  reaper.SetExtState(EXT_SECTION, "collapse", tostring(collapse), true)
   reaper.SetExtState(EXT_SECTION, "win_idx", tostring(win_idx), true)
   reaper.SetExtState(EXT_SECTION, "align", align and "1" or "0", true)
 end
@@ -134,15 +138,23 @@ local function do_process()
     return
   end
 
-  local candidates, paths, skip_lines = {}, {}, {}
+  -- Each candidate is keyed by job_key (source + region), not by source
+  -- path alone: two items trimmed from the same source to different
+  -- regions are two different jobs, and must not collapse into one
+  -- (the second would otherwise silently receive the first one's
+  -- output - the radio-chatter case this whole feature exists for).
+  local candidates, jobs, skip_lines = {}, {}, {}
   for i = 0, n_sel - 1 do
     local item = reaper.GetSelectedMediaItem(0, i)
     local take, path, err = core.validate_item(item)
     if err then
       table.insert(skip_lines, "skip: " .. err)
     else
-      table.insert(candidates, { item = item, take = take, path = path })
-      paths[path] = true
+      local start_sec, length_sec = core.get_item_region(item, take)
+      local job_key = core.make_job_key(path, start_sec, length_sec)
+      table.insert(candidates, { item = item, take = take, path = path,
+                                 job_key = job_key })
+      jobs[job_key] = { src_path = path, start_sec = start_sec, length_sec = length_sec }
     end
   end
 
@@ -154,11 +166,16 @@ local function do_process()
 
   local out_dir, used_project = core.output_dir(candidates[1].path)
 
+  -- "Width only" forces the strength/tail_strength values sent to
+  -- processing to 0, without touching the slider variables themselves -
+  -- so the slider positions are preserved for when the box is unchecked.
   local opts = {
-    strength = strength, tail_strength = tail_strength, collapse = collapse,
+    strength = width_only and 0.0 or strength,
+    tail_strength = width_only and 0.0 or tail_strength,
+    collapse = collapse,
     align = align, win = WIN_VALUES[win_idx + 1] or "auto", verbose = false,
   }
-  local ok_map, err_map, _output, diag_map = core.run_batch(python, dsp, paths, opts, out_dir)
+  local ok_map, err_map, _output, diag_map = core.run_batch(python, dsp, jobs, opts, out_dir)
   diag_map = diag_map or {}
 
   reaper.Undo_BeginBlock()
@@ -167,14 +184,14 @@ local function do_process()
   -- Guard the apply loop: an exception must not leave PreventUIRefresh on.
   local apply_ok, apply_err = pcall(function()
     for _, c in ipairs(candidates) do
-      local out_path = ok_map[c.path]
+      local out_path = ok_map[c.job_key]
       if out_path then
         local applied, aerr = core.apply_result(c.item, c.take, out_path)
         if applied then done = done + 1
         else lines[#lines + 1] = "skip: " .. core.basename(c.path) .. ": " .. aerr end
       else
         lines[#lines + 1] = "skip: " .. core.basename(c.path) .. ": " ..
-          (err_map[c.path] or "unknown batch error")
+          (err_map[c.job_key] or "unknown batch error")
       end
     end
   end)
@@ -191,22 +208,20 @@ local function do_process()
     done, #candidates, used_project and " -> project media folder" or ""))
 
   -- What InCenter actually measured, even when it decided to do nothing -
-  -- one line for a single item, one per file (prefixed) for several.
-  -- Inserted right after the "Processed N of M" summary above.
-  local diag_lines = {}
-  for _, c in ipairs(candidates) do
-    local payload = diag_map[c.path]
+  -- shown only for a single item. On a multi-item batch the per-file
+  -- lines turn into a wall of text (confirmed in real testing - 7 items
+  -- meant 7 stacked lines under the summary), so a multi-item run shows
+  -- just the "Processed N of M" summary above with no per-file detail.
+  -- Checked against #candidates (how many were queued), not how many
+  -- diag lines happened to come back, since a batch could partially
+  -- fail; skip: lines for errors stay visible regardless of count -
+  -- those matter more with more items, not less.
+  if #candidates == 1 then
+    local payload = diag_map[candidates[1].job_key]
     local formatted = payload and core.format_diag(payload)
     if formatted then
-      if #candidates > 1 then
-        table.insert(diag_lines, core.basename(c.path) .. ": " .. formatted)
-      else
-        table.insert(diag_lines, formatted)
-      end
+      table.insert(lines, 2, formatted)
     end
-  end
-  for i = #diag_lines, 1, -1 do
-    table.insert(lines, 2, diag_lines[i])
   end
 
   set_status(lines)
@@ -398,6 +413,13 @@ local function loop()
         "for coincident ones (XY, MS).")
       reaper.ImGui_PopStyleColor(ctx)
     end
+
+    reaper.ImGui_Spacing(ctx)
+    reaper.ImGui_PushStyleColor(ctx, reaper.ImGui_Col_Text(), COL_ITEM_TEXT)
+    changed, width_only = reaper.ImGui_Checkbox(ctx, "Width only (skip centering)", width_only)
+    reaper.ImGui_PopStyleColor(ctx)
+    if changed then save_settings() end
+    colored_text("Applies width only, without re-centering.", COL_LABEL)
 
     reaper.ImGui_Dummy(ctx, 0, 4)
     reaper.ImGui_Separator(ctx)

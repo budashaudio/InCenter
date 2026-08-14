@@ -119,8 +119,6 @@ A few non-obvious decisions, in case you're reading the source:
   source that can't be decoded cleanly falls back to 32-bit float output.
 - **SECTION takes** (reversed or glued items) are skipped with a message —
   glue to a plain file first if you need to process one.
-- **Item region:** the whole source file is processed, not just the item's
-  time selection. (Processing only the item region is planned.)
 - **Windows:** the macOS and Linux paths are the tested ones. Windows
   support is implemented but **experimental** — please report back if you
   run it there.
@@ -182,7 +180,10 @@ busted tests/lua --lpath="tests/lua/?.lua"
   GCC-PHAT alignment on the loudest region, auto window selection,
   format- and metadata-preserving WAV I/O, output to the project media
   folder, shared Lua core, control panel, batch action.
-  Experimental Windows support.
+  Experimental Windows support. Processing is now scoped to the item's
+  trimmed region rather than the whole source file, so a long file with
+  several separate events (e.g. radio chatter) can be centered piece by
+  piece.
 
 ## Credits & reporting
 
