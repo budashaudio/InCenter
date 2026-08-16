@@ -130,3 +130,61 @@ angle by a similar amount. The scene cannot be reconstructed from
 L/R energy alone. Worth stating explicitly so neither idea gets
 re-proposed later in a new costume without first answering: where would
 the missing information come from this time?
+
+## Python warm-up on panel open (not implemented)
+
+**Branch:** `experiment/python-warmup` (deleted after this was written).
+**Status:** hypothesis disproven at the measurement step. Nothing built.
+
+**What was proposed:** the first Process press of a session takes
+noticeably longer than later ones — Nikita measures roughly 4 seconds.
+The suspected cause was a cold OS disk cache for `scipy`'s dozens of
+compiled extension modules: first import reads them from disk, later
+ones hit the page cache. The proposed fix was a fire-and-forget
+background process, kicked off when the GUI panel opens, that does
+nothing but `import numpy, scipy` and exit — warming the page cache
+before the user presses Process.
+
+**The measurement that disproved it** (macOS, Apple Silicon, cache
+purged via `sudo purge` immediately before each cold number):
+
+- Cold `import numpy, scipy`: 0.230s. Warm (immediately after): 0.162s,
+  then 0.149s. Gap: ~0.08s.
+- A full warm end-to-end run through `incenter.py` directly (subprocess
+  spawn + import + align + recenter_bands + write, small single-item
+  file): ~0.7s (0.720s, 0.693s across two runs).
+- The exact wrapper-script mechanism `core.run_worker` uses (write a
+  `.sh` wrapper, `chmod +x`, execute, read exit-code/output sidecar
+  files) added a further ~0.35s over the direct invocation (1.054s vs.
+  0.72s) - a real, measurable cost, but still nowhere near 4s on its
+  own.
+
+Even in the best case - eliminating the import cost entirely - the
+recoverable amount is a few tenths of a second out of the ~4 seconds
+actually observed. The import is not where the time goes.
+
+**Conclusion:** not worth implementing. Not because it wouldn't work -
+the mechanism is straightforward and would warm the cache exactly as
+designed - but because the thing it warms was never the bottleneck.
+Building it would have shipped real code (a new `core` helper, a
+GUI-load-time hook, ExtState-cache-aware gating) to shave a fraction of
+a second off a four-second problem.
+
+**Where the ~4 seconds likely goes instead** (untested hypotheses for
+whoever picks this up next - all on the REAPER/Lua side, which is why a
+Python-only measurement couldn't see them):
+
+- `core.find_python` running a full candidate scan when the ExtState
+  cache is empty - each candidate is probed by actually launching it,
+  not just checking it exists.
+- `core.build_peaks` rebuilding the waveform after the source swap.
+- `ExecProcess` overhead itself, on top of the ~0.35s wrapper-script
+  write/chmod/execute/sidecar-file cycle measured above.
+- First-time ReaImGui context creation and window paint.
+
+**What would settle it:** timing instrumentation inside the Lua
+front-end around each phase (`find_python`, `run_batch`, the apply
+loop, `build_peaks`) during a real REAPER session - the four seconds
+happen somewhere a shell-level Python measurement can't reach. The
+branch's code (nothing was written beyond the measurement scripts, none
+of which were committed) never reached `main`.
