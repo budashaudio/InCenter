@@ -1,6 +1,9 @@
 """Unit tests for the incenter.py DSP engine."""
 import argparse
+import os
 import struct
+import subprocess
+import sys
 
 import numpy as np
 import pytest
@@ -474,6 +477,72 @@ class TestRunBatchRegion:
         # must not raise; reported as a malformed line like any other
         # parse failure, not as a Python traceback
 
+
+class TestBatchCliVerbose:
+    """The --batch CLI path with verbose output on (i.e. without --quiet).
+
+    Every other batch test calls run_batch() in-process with verbose=False,
+    which is exactly how a NameError in the verbose-only summary line
+    survived: the batch action Lua script hardcodes VERBOSE = true, so the
+    only configuration that ships was the only one never exercised. These
+    tests drive the real CLI in a subprocess so the process exit code -
+    what the Lua side actually keys on - is part of the assertion.
+    """
+
+    def _write_source(self, path, sr=48000, dur=0.3):
+        n = int(sr * dur)
+        rng = np.random.default_rng(7)
+        left = sine(300, sr, dur, amp=0.3) + 0.05 * rng.standard_normal(n)
+        right = sine(300, sr, dur, amp=0.1) + 0.05 * rng.standard_normal(n)
+        info = ic.WavInfo(sr=sr, audio_fmt=1, bits=16, ch=2, extra_chunks=[])
+        ic.write_wav(str(path), stereo(left, right), info)
+
+    def _run(self, manifest):
+        script = os.path.join(os.path.dirname(os.path.abspath(__file__)),
+                              "..", "incenter.py")
+        return subprocess.run(
+            [sys.executable, script, "--batch", str(manifest)],
+            capture_output=True, text=True,
+        )
+
+    def test_verbose_batch_exits_zero_and_prints_summary(self, tmp_path):
+        # No --quiet, so verbose is on - the configuration the batch action
+        # ships with. Two lines, so a wrong count is visible as well as a crash.
+        for name in ("a", "b"):
+            self._write_source(tmp_path / f"{name}.wav")
+        manifest = tmp_path / "manifest.txt"
+        manifest.write_text(
+            f"{tmp_path / 'a.wav'}\t{tmp_path / 'a_out.wav'}\n"
+            f"{tmp_path / 'b.wav'}\t{tmp_path / 'b_out.wav'}\n"
+        )
+
+        r = self._run(manifest)
+
+        assert r.returncode == 0, (
+            f"verbose --batch exited {r.returncode}\n"
+            f"stdout:\n{r.stdout}\nstderr:\n{r.stderr}"
+        )
+        assert "batch done: 2/2 file(s) ok" in r.stdout
+        assert (tmp_path / "a_out.wav").exists()
+        assert (tmp_path / "b_out.wav").exists()
+
+    def test_verbose_batch_summary_counts_only_successes(self, tmp_path):
+        # A failing line must not be counted as ok, and must still not stop
+        # the run from exiting cleanly with an accurate summary.
+        self._write_source(tmp_path / "a.wav")
+        manifest = tmp_path / "manifest.txt"
+        manifest.write_text(
+            f"{tmp_path / 'a.wav'}\t{tmp_path / 'a_out.wav'}\n"
+            f"{tmp_path / 'missing.wav'}\t{tmp_path / 'x_out.wav'}\n"
+        )
+
+        r = self._run(manifest)
+
+        assert r.returncode == 0, (
+            f"verbose --batch exited {r.returncode}\n"
+            f"stdout:\n{r.stdout}\nstderr:\n{r.stderr}"
+        )
+        assert "batch done: 1/2 file(s) ok" in r.stdout
 
 # --------------------------------------------------------------- analysis helpers
 

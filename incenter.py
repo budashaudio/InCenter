@@ -828,7 +828,7 @@ def run_batch(manifest_path, args, verbose):
             print(f"##ERR##\t{out_path}\t{e}")
 
     if verbose:
-        print(f"batch done: {ok_count}/{len(pairs)} file(s) ok")
+        print(f"batch done: {ok_count}/{len(lines)} file(s) ok")
 
 
 def main():
