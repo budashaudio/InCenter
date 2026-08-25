@@ -884,6 +884,122 @@ describe("incenter_core", function()
       assert.truthy(ok_map[key_b])
       assert.is_not.equal(ok_map[key_a], ok_map[key_b])
     end)
+
+    -- Partial-failure recovery: a job that reported ##OK## and left a
+    -- valid file on disk succeeded, regardless of how the worker process
+    -- as a whole exited. "fails every job and clears the python cache
+    -- when the worker itself fails" above already covers the case where
+    -- NOTHING succeeded (still all-failed, still clears the cache), and
+    -- every clean-exit test above this point already covers the
+    -- unchanged happy path - these three cover the non-zero-exit,
+    -- something-recoverable cases.
+
+    it("keeps a completed job's result on a non-zero exit if its file made it to disk", function()
+      -- The scenario 29f626f (the pairs/lines typo) turned into a total
+      -- loss: the worker exits non-zero, but earlier jobs already wrote
+      -- good files. This is the fix - those jobs are not failures.
+      local core = load_core()
+      _G.reaper.SetExtState("incenter", "python_path", "/usr/bin/python3")
+      local tmp_dir = os.getenv("TMPDIR") or "/tmp/"
+      if tmp_dir:sub(-1) ~= "/" then tmp_dir = tmp_dir .. "/" end
+
+      local key_a = core.make_job_key("/a.wav", 0.0, 1.0)
+      local key_b = core.make_job_key("/b.wav", 0.0, 1.0)
+      local out_path_a
+      core.run_worker = function(args, _timeout)
+        local mf = io.open(args[4], "r")
+        local out_lines = {}
+        for line in mf:lines() do
+          local in_path, out_path = line:match("^([^\t]+)\t([^\t]+)")
+          if in_path == "/a.wav" then
+            out_path_a = out_path
+            local of = io.open(out_path, "w")
+            of:write("fake wav bytes")
+            of:close()
+            table.insert(out_lines,
+              "##DIAG##\t" .. out_path ..
+                "\toffset=+3.24;attack=48.24;tail=44.10;spread=6.80;win=2048;bands=24")
+            table.insert(out_lines, "##OK##\t" .. out_path .. "\t" .. in_path)
+          end
+          -- /b.wav: the process is killed before it ever gets there
+        end
+        mf:close()
+        return false, table.concat(out_lines, "\n") .. "\nKilled"
+      end
+
+      local jobs = {
+        [key_a] = { src_path = "/a.wav", start_sec = 0.0, length_sec = 1.0 },
+        [key_b] = { src_path = "/b.wav", start_sec = 0.0, length_sec = 1.0 },
+      }
+      local ok_map, err_map, _output, diag_map = core.run_batch(
+        "/usr/bin/python3", "/dsp/incenter.py", jobs,
+        { strength = 1.0, tail_strength = 1.0, align = false, verbose = false },
+        tmp_dir
+      )
+
+      assert.truthy(ok_map[key_a])
+      assert.truthy(err_map[key_b])
+      -- a recovered job still gets its diagnostic line
+      assert.equal(
+        "offset=+3.24;attack=48.24;tail=44.10;spread=6.80;win=2048;bands=24",
+        diag_map[key_a])
+      -- at least one job succeeded, so the interpreter is demonstrably
+      -- fine - the cache must not be cleared
+      assert.equal("/usr/bin/python3", _G.reaper.GetExtState("incenter", "python_path"))
+
+      os.remove(out_path_a)
+    end)
+
+    it("does not trust an ##OK## line on a non-zero exit if the file never landed on disk", function()
+      local core = load_core()
+      local tmp_dir = os.getenv("TMPDIR") or "/tmp/"
+      if tmp_dir:sub(-1) ~= "/" then tmp_dir = tmp_dir .. "/" end
+
+      local key_a = core.make_job_key("/a.wav", 0.0, 1.0)
+      core.run_worker = function(args, _timeout)
+        local mf = io.open(args[4], "r")
+        local in_path, out_path = mf:read("*l"):match("^([^\t]+)\t([^\t]+)")
+        mf:close()
+        -- ##OK## made it into the log, but the process was killed before
+        -- (or during) the actual write to out_path - nothing is there.
+        return false, "##OK##\t" .. out_path .. "\t" .. in_path .. "\nKilled"
+      end
+
+      local jobs = { [key_a] = { src_path = "/a.wav", start_sec = 0.0, length_sec = 1.0 } }
+      local ok_map, err_map = core.run_batch(
+        "/usr/bin/python3", "/dsp/incenter.py", jobs,
+        { strength = 1.0, tail_strength = 1.0, align = false, verbose = false },
+        tmp_dir
+      )
+
+      assert.is_nil(ok_map[key_a])
+      assert.truthy(err_map[key_a])
+      assert.truthy(err_map[key_a]:match("missing"))
+    end)
+
+    it("keeps a job's own ##ERR## message on a non-zero exit, not the process-level one", function()
+      local core = load_core()
+      local tmp_dir = os.getenv("TMPDIR") or "/tmp/"
+      if tmp_dir:sub(-1) ~= "/" then tmp_dir = tmp_dir .. "/" end
+
+      local key_a = core.make_job_key("/a.wav", 0.0, 1.0)
+      core.run_worker = function(args, _timeout)
+        local mf = io.open(args[4], "r")
+        local _in_path, out_path = mf:read("*l"):match("^([^\t]+)\t([^\t]+)")
+        mf:close()
+        return false, "##ERR##\t" .. out_path .. "\tsomething broke on this file\n" ..
+          "Traceback (most recent call last):\nRuntimeError: worker crashed"
+      end
+
+      local jobs = { [key_a] = { src_path = "/a.wav", start_sec = 0.0, length_sec = 1.0 } }
+      local _ok_map, err_map = core.run_batch(
+        "/usr/bin/python3", "/dsp/incenter.py", jobs,
+        { strength = 1.0, tail_strength = 1.0, align = false, verbose = false },
+        tmp_dir
+      )
+
+      assert.equal("something broke on this file", err_map[key_a])
+    end)
   end)
 
 end)

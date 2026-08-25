@@ -562,20 +562,28 @@ function core.run_batch(python, dsp, jobs, opts, out_dir)
   local ok, output = core.run_worker(args, timeout_ms)
   os.remove(manifest_path)
 
-  if not ok then
-    local last_line = (output or ""):match("([^\n]*)\n?$") or ""
-    local err_map = {}
-    for job_key in pairs(jobs) do
-      err_map[job_key] = "batch worker error: " ..
-        (last_line ~= "" and last_line or "unknown")
-    end
-    -- A failed run may mean a stale cached interpreter; force a re-scan next time.
-    core.clear_python_cache()
-    return {}, err_map, output or "", {}
-  end
-
   local ok_by_outpath, err_by_outpath, diag_by_outpath =
     core.parse_batch_output(output or "")
+
+  -- A job that reported ##OK## and left a valid file on disk succeeded,
+  -- regardless of how the worker process as a whole exited: a killed or
+  -- crashed worker can still have written N-1 good files before the Nth
+  -- one took it down, and those N-1 are not failures. last_line (usually
+  -- a traceback's final line) is kept as the only clue for jobs that
+  -- reported nothing at all - but only on a failed exit, and only
+  -- appended to the "nothing reported" message, so it never overwrites a
+  -- job's own ##ERR## text.
+  --
+  -- The on-disk check only runs when the worker exited non-zero: on a
+  -- clean exit ok_by_outpath is trustworthy on its own (that's the path
+  -- that already worked before this fix), and skipping the extra
+  -- io.open per job there keeps the happy path exactly as cheap as it
+  -- was. On a failed exit a truncated/half-written file is plausible
+  -- (killed mid-write), so the check is worth the cost.
+  local last_line = nil
+  if not ok then
+    last_line = (output or ""):match("([^\n]*)\n?$") or ""
+  end
 
   -- Translate incenter.py's out_path-keyed results back to job_key,
   -- which is what `jobs` was keyed by and what callers built their
@@ -583,19 +591,41 @@ function core.run_batch(python, dsp, jobs, opts, out_dir)
   -- erred (killed mid-batch) counts as failed rather than silently
   -- skipped.
   local ok_map, err_map, diag_map = {}, {}, {}
+  local any_ok = false
   for job_key in pairs(jobs) do
     local out_path = out_for[job_key]
-    if ok_by_outpath[out_path] then
+    local reported_ok = ok_by_outpath[out_path]
+    if reported_ok and (ok or core.file_exists(out_path)) then
       ok_map[job_key] = out_path
+      any_ok = true
     elseif err_by_outpath[out_path] then
       err_map[job_key] = err_by_outpath[out_path]
+    elseif reported_ok then
+      -- Non-zero exit, ##OK## reported, but the file isn't actually
+      -- there - a kill between the write and the print, or a truncated
+      -- write, is exactly the case the disk check above exists for.
+      err_map[job_key] = "reported ok but output file is missing on disk"
     else
       err_map[job_key] = "no result reported (worker may have been interrupted)"
+      if last_line and last_line ~= "" then
+        err_map[job_key] = err_map[job_key] .. ": " .. last_line
+      end
     end
     if diag_by_outpath[out_path] then
       diag_map[job_key] = diag_by_outpath[out_path]
     end
   end
+
+  -- clear_python_cache exists for one scenario: the cached interpreter
+  -- has gone bad (uninstalled, moved, a dependency removed), so the next
+  -- run should re-scan. A broken interpreter cannot produce a single
+  -- ##OK##, so if even one job succeeded here, the interpreter is
+  -- demonstrably fine and clearing the cache would only cost the next
+  -- run a full re-scan for nothing.
+  if not ok and not any_ok then
+    core.clear_python_cache()
+  end
+
   return ok_map, err_map, output or "", diag_map
 end
 

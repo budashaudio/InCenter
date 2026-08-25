@@ -1,9 +1,11 @@
 """Unit tests for the incenter.py DSP engine."""
 import argparse
 import os
+import signal
 import struct
 import subprocess
 import sys
+import time
 
 import numpy as np
 import pytest
@@ -543,6 +545,90 @@ class TestBatchCliVerbose:
             f"stdout:\n{r.stdout}\nstderr:\n{r.stderr}"
         )
         assert "batch done: 1/2 file(s) ok" in r.stdout
+
+
+class TestBatchStdoutSurvivesSigkill:
+    """Regression test for the flush=True fix on run_batch's machine-channel
+    prints (##OK##/##ERR##/##DIAG##).
+
+    In production, the worker's stdout is redirected to a log file (the
+    Lua wrapper script), not a TTY, so Python block-buffers it. A hard
+    kill - the ExecProcess timeout path on the Lua side - runs no atexit
+    flush, so anything still sitting in that buffer is lost, including
+    ##OK## lines for jobs that had already finished and written a valid
+    file to disk. Step 2's Lua-side recovery of partial results is
+    worthless on the timeout path without this: there is nothing in the
+    log to recover. This drives the real CLI in a subprocess, redirects
+    its stdout to a real file exactly like the Lua wrapper does, and kills
+    it with SIGKILL (no graceful shutdown) once enough jobs have provably
+    finished.
+    """
+
+    def _write_source(self, path, sr=48000, dur=0.3, seed=0):
+        n = int(sr * dur)
+        rng = np.random.default_rng(seed)
+        left = sine(300, sr, dur, amp=0.3) + 0.05 * rng.standard_normal(n)
+        right = sine(300, sr, dur, amp=0.1) + 0.05 * rng.standard_normal(n)
+        info = ic.WavInfo(sr=sr, audio_fmt=1, bits=16, ch=2, extra_chunks=[])
+        ic.write_wav(str(path), stereo(left, right), info)
+
+    def test_completed_jobs_ok_lines_survive_a_sigkill_mid_batch(self, tmp_path):
+        n_files = 6
+        out_paths = []
+        manifest_lines = []
+        for i in range(n_files):
+            in_path = tmp_path / f"in_{i}.wav"
+            out_path = tmp_path / f"out_{i}.wav"
+            self._write_source(in_path, seed=i)
+            manifest_lines.append(f"{in_path}\t{out_path}")
+            out_paths.append(out_path)
+        manifest = tmp_path / "manifest.txt"
+        manifest.write_text("\n".join(manifest_lines) + "\n")
+
+        script = os.path.join(os.path.dirname(os.path.abspath(__file__)),
+                              "..", "incenter.py")
+        log_path = tmp_path / "worker.log"
+        with open(log_path, "wb") as logfile:
+            proc = subprocess.Popen(
+                [sys.executable, script, "--batch", str(manifest)],
+                stdout=logfile, stderr=subprocess.STDOUT,
+            )
+            try:
+                # Wait for the THIRD file's output to land on disk. Jobs
+                # run strictly in manifest order within a single process,
+                # so by the time job 2 has written its file, jobs 0 and 1
+                # have already returned from process_one and executed
+                # their own ##OK## print - not a race, a consequence of
+                # the sequential loop in run_batch().
+                deadline = time.monotonic() + 15.0
+                while not out_paths[2].exists():
+                    if proc.poll() is not None:
+                        pytest.fail(
+                            "batch process exited before the 3rd job "
+                            f"finished (returncode={proc.returncode})")
+                    if time.monotonic() > deadline:
+                        proc.kill()
+                        proc.wait()
+                        pytest.fail("3rd job never finished before timeout")
+                    time.sleep(0.001)
+
+                proc.send_signal(signal.SIGKILL)
+                proc.wait(timeout=15)
+            finally:
+                if proc.poll() is None:
+                    proc.kill()
+                    proc.wait()
+
+        assert proc.returncode != 0   # confirms a real kill, not a clean finish
+
+        log_text = log_path.read_text(errors="replace")
+        assert f"##OK##\t{out_paths[0]}" in log_text, (
+            f"job 0's ##OK## line was lost on SIGKILL - log:\n{log_text}"
+        )
+        assert f"##OK##\t{out_paths[1]}" in log_text, (
+            f"job 1's ##OK## line was lost on SIGKILL - log:\n{log_text}"
+        )
+
 
 # --------------------------------------------------------------- analysis helpers
 
