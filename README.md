@@ -47,17 +47,17 @@ Everything installs together as one package:
    and pick `BudashAudio_InCenter.lua`.
 3. Requires the **ReaImGui** extension (Extensions -> ReaPack -> Browse
    packages -> search "ReaImGui").
-4. Requires a system **Python 3** with `numpy` and `scipy`. If you don't
-   already have these, follow **[INSTALL_Python.md](INSTALL_Python.md)** —
-   a plain, step-by-step guide (no Python knowledge needed) for macOS,
-   Windows and Linux. InCenter then auto-detects the interpreter — it
-   actually tries `import numpy, scipy` in each candidate, so it won't
-   pick a Python that's missing the libraries.
+4. Requires a system **Python 3** with `numpy`. If you don't already have
+   it, follow **[INSTALL_Python.md](INSTALL_Python.md)** — a plain,
+   step-by-step guide (no Python knowledge needed) for macOS, Windows and
+   Linux. InCenter then auto-detects the interpreter — it actually tries
+   `import numpy` in each candidate, so it won't pick a Python that's
+   missing the library.
 
 **Do not load `incenter.py` or `incenter_core.lua` as REAPER actions.**
 They're dependencies, not standalone scripts. `incenter.py` only runs
 correctly as a subprocess with CLI arguments; loading it directly runs it
-under REAPER's own embedded Python, which can't import numpy/scipy and may
+under REAPER's own embedded Python, which can't import numpy and may
 hang REAPER. Both carry an `@noindex` tag so ReaPack won't list them.
 
 ## Use
@@ -82,19 +82,22 @@ The original source audio is never overwritten.
 A few non-obvious decisions, in case you're reading the source:
 
 - **DSP runs in a subprocess, not in REAPER's embedded Python.** REAPER's
-  built-in Python can't safely import numpy/scipy (they deadlock via
+  built-in Python can't safely import numpy (it deadlocks via
   ctypes/libffi inside the embedded interpreter), so all processing shells
   out to your system Python via `reaper.ExecProcess` with a small wrapper
   script that captures the real exit code to a sidecar file.
-- **One `incenter.py` process per batch, not per file.** scipy's import
-  cost (~2 s, independent of file length) is the dominant fixed cost per
-  launch, so processing every unique source in a single `--batch` run
-  turns an Nx cost into a 1x. `ExecProcess` blocks REAPER's UI thread
-  while it waits — that's normal, not a hang; the panel shows
-  "Processing..." first so you can see it started.
-- **Own WAV reader/writer instead of scipy's.** scipy can't write 24-bit
-  and drops metadata chunks; parsing the RIFF container directly lets
-  input format == output format and preserves bext/iXML/cue/etc.
+- **One `incenter.py` process per batch, not per file.** Interpreter
+  import is a fixed cost per launch, independent of file length (it used
+  to be the dominant one, ~2s, back when scipy was still a dependency -
+  see the "STFT (numpy)" section of incenter.py for why it no longer is),
+  so processing every unique source in a single `--batch` run still turns
+  an Nx cost into a 1x. `ExecProcess` blocks REAPER's UI thread while it
+  waits — that's normal, not a hang; the panel shows "Processing..."
+  first so you can see it started.
+- **Own WAV reader/writer instead of a library one.** scipy.io.wavfile
+  (back when scipy was still a dependency) can't write 24-bit and drops
+  metadata chunks; parsing the RIFF container directly lets input format
+  == output format and preserves bext/iXML/cue/etc.
 - **The old take source is never destroyed after a swap.** Destroying a
   `PCM_source` still shared between takes segfaults inside
   `SetActiveTake`. Leaving it alone leaks a little memory per run, which
@@ -140,7 +143,7 @@ A few non-obvious decisions, in case you're reading the source:
 - **Nothing happens / REAPER seems frozen:** first check you loaded
   `BudashAudio_InCenter.lua`, **not** `incenter.py` (the most common
   mistake).
-- **"No Python 3 found":** install numpy+scipy in your Python 3, or set
+- **"No Python 3 found":** install numpy in your Python 3, or set
   `PYTHON_OVERRIDE` near the top of `BudashAudio_InCenter.lua` to its
   full path — see [INSTALL_Python.md](INSTALL_Python.md).
 - **The panel freezes while processing:** expected — `ExecProcess` blocks
@@ -169,7 +172,7 @@ busted tests/lua --lpath="tests/lua/?.lua"
 
 - REAPER (developed on the portable macOS build, Apple Silicon)
 - ReaImGui — for the control panel only
-- Python 3 with `numpy` and `scipy`
+- Python 3 with `numpy`
 - Stereo WAV sources (24-bit/48 kHz is the primary target; other stereo
   WAVs work too)
 

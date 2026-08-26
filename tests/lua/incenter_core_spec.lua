@@ -363,7 +363,7 @@ describe("incenter_core", function()
       assert.truthy(err:match("doesn't exist"))
     end)
 
-    it("rejects an override that exists but lacks numpy/scipy", function()
+    it("rejects an override that exists but lacks numpy", function()
       local core = load_core()
       local tmp = os.tmpname()
       local f = io.open(tmp, "w"); f:write("x"); f:close()
@@ -371,7 +371,7 @@ describe("incenter_core", function()
 
       local path, err = core.find_python(tmp)
       assert.is_nil(path)
-      assert.truthy(err:match("no numpy/scipy"))
+      assert.truthy(err:match("no numpy"))
       os.remove(tmp)
     end)
 
@@ -777,7 +777,7 @@ describe("incenter_core", function()
       local core = load_core()
       _G.reaper.SetExtState("incenter", "python_path", "/usr/bin/python3")
       core.run_worker = function(_args, _timeout)
-        return false, "traceback...\nModuleNotFoundError: no module named 'scipy'"
+        return false, "traceback...\nModuleNotFoundError: no module named 'numpy'"
       end
 
       local key_a = core.make_job_key("/a.wav", 0.0, 1.0)

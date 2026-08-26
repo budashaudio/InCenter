@@ -9,7 +9,7 @@
 --   Free, in-REAPER stereo re-centering tool for foley/field recordings
 --   whose stereo image is pulled to one side. See README.md for details.
 --   Requires the bundled incenter_core.lua + incenter.py and a system
---   Python 3 with numpy+scipy.
+--   Python 3 with numpy.
 -- @link https://github.com/budashaudio/incenter
 --
 -- BudashAudio_InCenter.lua - InCenter control panel  [v0.9.0]
@@ -23,7 +23,7 @@
 -- the settings.
 
 -- ---- user-editable settings ------------------------------------------
--- If auto-detection can't find your python3 (the one with numpy+scipy),
+-- If auto-detection can't find your python3 (the one with numpy),
 -- set its full path here, e.g. "/usr/local/bin/python3".
 local PYTHON_OVERRIDE = ""
 -- ----------------------------------------------------------------------

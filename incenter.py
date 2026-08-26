@@ -5,7 +5,7 @@
 # It's meant to be invoked as a subprocess (with CLI args) by
 # BudashAudio_InCenter.lua, which sits next to it. Loading
 # it directly in REAPER runs it under REAPER's own embedded Python,
-# which cannot import numpy/scipy (see README.md) - at best you'll get
+# which cannot import numpy (see README.md) - at best you'll get
 # "ModuleNotFoundError: No module named 'numpy'", at worst a full hang.
 """
 InCenter - offline stereo re-centering tool (file-based). DSP engine
@@ -50,7 +50,6 @@ import struct
 import sys
 
 import numpy as np
-from scipy.signal import stft, istft
 
 __version__ = "0.9.0"
 
@@ -59,17 +58,19 @@ EPS = 1e-12
 
 # ---------------------------------------------------------------- I/O
 #
-# We parse and write the RIFF/WAVE container ourselves instead of using
-# scipy.io.wavfile, for two reasons:
-#   1. scipy can't write 24-bit PCM at all, and warns (and historically
-#      mis-handled) on 24-bit reads - which is the project's primary
-#      source format. Doing it by hand lets input bit depth == output bit
-#      depth (16->16, 24->24, float->float).
-#   2. scipy silently drops every chunk except fmt/data, so BWF timecode
-#      (bext), iXML, cue markers, etc. are lost. For field/foley material
-#      that metadata is the difference between a file that drops back onto
-#      the timeline at the right place and one that doesn't. We keep every
-#      non-fmt/non-data chunk and write it back untouched.
+# We parse and write the RIFF/WAVE container ourselves rather than reach
+# for a library one (e.g. scipy.io.wavfile, back when scipy was still a
+# dependency here - see the "STFT (numpy)" section below for why it no
+# longer is), for two reasons that would apply to any such library:
+#   1. scipy.io.wavfile can't write 24-bit PCM at all, and warns (and
+#      historically mis-handled) on 24-bit reads - which is the project's
+#      primary source format. Doing it by hand lets input bit depth ==
+#      output bit depth (16->16, 24->24, float->float).
+#   2. scipy.io.wavfile silently drops every chunk except fmt/data, so BWF
+#      timecode (bext), iXML, cue markers, etc. are lost. For field/foley
+#      material that metadata is the difference between a file that drops
+#      back onto the timeline at the right place and one that doesn't. We
+#      keep every non-fmt/non-data chunk and write it back untouched.
 
 
 class WavInfo:
@@ -504,6 +505,124 @@ def collapse(x, amount, compensate=True, max_gain_db=12.0):
 
 # ---------------------------------------------------------------- global (robust)
 
+# ---- STFT (numpy) ----
+#
+# Hand-ported from scipy.signal.stft/istft (scipy 1.16, _spectral_py.py),
+# covering exactly the call shape recenter_bands uses and no more:
+# window='hann', nfft=None (-> nperseg), detrend=False,
+# return_onesided=True, boundary='zeros', padded=True, scaling='spectrum'.
+# This is InCenter's only former use of SciPy; replacing it removes SciPy
+# from the runtime dependency entirely (it remains a test-only dependency,
+# for tests/test_incenter.py::TestStftMatchesScipy, which proves this
+# matches scipy.signal.stft/istft to float64 round-off).
+#
+# Do not "clean up" the two behaviours below - they are scipy's actual
+# behaviour, not bugs, and recenter_bands's pre-existing edge cases (a
+# region shorter than the requested window; see the golden-output sweep
+# under golden/) depend on matching them exactly, crashes included:
+#   * A signal shorter than nperseg silently shrinks nperseg to the
+#     signal length (scipy warns; this doesn't, since nothing here reads
+#     the warning either way).
+#   * _istft trusts the nperseg the CALLER passes, not Zxx's own shape.
+#     If a caller passes a nperseg that stft() would have had to shrink
+#     (as above), _istft raises the same numpy broadcast ValueError scipy
+#     would - it is not re-derived or validated against Zxx here either.
+
+def _hann_periodic(n):
+    """The PERIODIC Hann window scipy.signal.get_window('hann', n) builds
+    for STFT analysis - not np.hanning's SYMMETRIC one used elsewhere in
+    this file for the attack/tail mask kernel (see recenter_bands). They
+    differ by exactly one sample: audibly nothing, numerically everything
+    - using the wrong one still "sounds like an STFT" but reconstructs a
+    different signal bit for bit. n<=1 is special-cased to all-ones,
+    matching scipy.signal.windows' own _len_guards (every window function
+    there returns ones(n) for n<=1, symmetric or not).
+    """
+    if n <= 1:
+        return np.ones(n)
+    return 0.5 - 0.5 * np.cos(2.0 * np.pi * np.arange(n) / n)
+
+
+def _stft(x, fs, nperseg, noverlap):   # -> (f, t, Z)
+    """Drop-in replacement for scipy.signal.stft(x, fs, nperseg=nperseg,
+    noverlap=noverlap) at recenter_bands's defaults. x is real and 1-D.
+    """
+    x = np.asarray(x, dtype=np.float64)
+
+    nperseg = min(int(nperseg), len(x)) if len(x) else int(nperseg)
+    win = _hann_periodic(nperseg)
+
+    noverlap = int(noverlap)
+    if noverlap >= nperseg:
+        raise ValueError("noverlap must be less than nperseg.")
+    nstep = nperseg - noverlap
+    nfft = nperseg
+
+    # boundary='zeros': centre the first window on x[0].
+    ext = nperseg // 2
+    xe = np.concatenate([np.zeros(ext), x, np.zeros(ext)])
+
+    # padded=True: zero-pad the end to a whole number of hops (scipy's
+    # exact formula, trailing "% nperseg" included).
+    nadd = (-(len(xe) - nperseg) % nstep) % nperseg
+    if nadd:
+        xe = np.concatenate([xe, np.zeros(nadd)])
+
+    n_frames = (len(xe) - nperseg) // nstep + 1
+    idx = np.arange(nperseg)[None, :] + nstep * np.arange(n_frames)[:, None]
+    frames = xe[idx] * win[None, :]                # (n_frames, nperseg)
+
+    Z = np.fft.rfft(frames, n=nfft, axis=-1)        # (n_frames, nfft//2+1)
+    Z *= 1.0 / win.sum()                            # scaling='spectrum', mode='stft'
+    Z = Z.T                                         # -> (n_freq, n_frames)
+
+    f = np.fft.rfftfreq(nfft, 1.0 / fs)
+    t = np.arange(nperseg / 2, len(xe) - nperseg / 2 + 1, nstep) / float(fs)
+    t = t - (nperseg / 2) / fs                      # boundary is not None
+
+    return f, t, Z
+
+
+def _istft(Z, fs, nperseg, noverlap):  # -> (t, x)
+    """Drop-in replacement for scipy.signal.istft(Z, fs, nperseg=nperseg,
+    noverlap=noverlap) at recenter_bands's defaults (input_onesided=True,
+    boundary=True, scaling='spectrum'). Z has shape (n_freq, n_frames).
+    """
+    Z = np.asarray(Z) + 0j
+    n_freq, nseg = Z.shape
+
+    nperseg = int(nperseg)
+    n_default = 2 * (n_freq - 1)
+    nfft = nperseg if nperseg == n_default + 1 else n_default
+
+    noverlap = int(noverlap)
+    if noverlap >= nperseg:
+        raise ValueError("noverlap must be less than nperseg.")
+    nstep = nperseg - noverlap
+
+    win = _hann_periodic(nperseg)
+
+    xsubs = np.fft.irfft(Z, n=nfft, axis=0)[:nperseg, :]   # (nperseg, nseg)
+    xsubs = xsubs * win.sum()                               # scaling='spectrum'
+
+    outputlength = nperseg + (nseg - 1) * nstep
+    x = np.zeros(outputlength, dtype=xsubs.dtype)
+    norm = np.zeros(outputlength, dtype=xsubs.dtype)
+    for i in range(nseg):
+        x[i * nstep:i * nstep + nperseg] += xsubs[:, i] * win
+        norm[i * nstep:i * nstep + nperseg] += win ** 2
+
+    ext = nperseg // 2
+    x = x[ext:-ext]
+    norm = norm[ext:-ext]
+
+    x = x / np.where(norm > 1e-10, norm, 1.0)
+    x = x.real
+
+    t = np.arange(len(x)) / float(fs)
+    return t, x
+
+
 # ---------------------------------------------------------------- bands (static per band)
 
 def recenter_bands(x, sr, strength, n_bands=24, nperseg=4096,
@@ -523,8 +642,8 @@ def recenter_bands(x, sr, strength, n_bands=24, nperseg=4096,
     if tail_strength is None:
         tail_strength = strength
     noverlap = nperseg * 3 // 4
-    f, _, ZL = stft(x[:, 0], sr, nperseg=nperseg, noverlap=noverlap)
-    _, _, ZR = stft(x[:, 1], sr, nperseg=nperseg, noverlap=noverlap)
+    f, _, ZL = _stft(x[:, 0], sr, nperseg=nperseg, noverlap=noverlap)
+    _, _, ZR = _stft(x[:, 1], sr, nperseg=nperseg, noverlap=noverlap)
     bands = make_bands(f, n_bands)
     n_frames = ZL.shape[1]
 
@@ -608,8 +727,8 @@ def recenter_bands(x, sr, strength, n_bands=24, nperseg=4096,
             print(f"{bi:>4}  {f[idx[0]]:>7.0f}-{f[idx[-1]]:>6.0f} Hz  "
                   f"{a_att:>6.1f}d  {a_tail:>6.1f}d")
 
-    _, yl = istft(ZL, sr, nperseg=nperseg, noverlap=noverlap)
-    _, yr = istft(ZR, sr, nperseg=nperseg, noverlap=noverlap)
+    _, yl = _istft(ZL, sr, nperseg=nperseg, noverlap=noverlap)
+    _, yr = _istft(ZR, sr, nperseg=nperseg, noverlap=noverlap)
     n = min(len(yl), len(x))
     y = np.stack([yl[:n], yr[:n]], axis=1)
     if n < len(x):
@@ -769,10 +888,11 @@ def _finalize_and_write(out_path, y, info, args, v):
 
 def run_batch(manifest_path, args, verbose):
     """Process every line in the manifest within this single process. This
-    is the point of --batch: scipy/numpy import is the dominant fixed cost
-    per process launch (roughly 2s regardless of file length), so
-    processing N files in one launch instead of N launches turns that Nx
-    cost into a 1x cost. Per-line outcome is printed with a ##OK##/##ERR##
+    is the point of --batch: numpy import is the dominant fixed cost per
+    process launch (well under a second, and independent of file length -
+    scipy used to make this ~2s before it was removed as a dependency),
+    so processing N files in one launch instead of N launches still turns
+    that Nx cost into a 1x cost. Per-line outcome is printed with a ##OK##/##ERR##
     prefix so a caller (e.g. the REAPER Lua side) can parse results even
     with --verbose chatter interleaved.
 
