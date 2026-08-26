@@ -807,6 +807,132 @@ class TestCollapse:
         assert gain <= 10 ** (12.0 / 20.0) + 1e-9
 
 
+class TestStftMatchesScipy:
+    """Proves _stft/_istft (the hand-ported numpy replacement, see the
+    "STFT (numpy)" section of incenter.py) match scipy.signal.stft/istft
+    at recenter_bands's exact call shape, to float64 round-off.
+
+    SciPy is a test-only dependency now - importorskip so a numpy-only
+    install (the whole point of this change) still runs the rest of the
+    suite. Shipping code must never import scipy; see
+    TestNoScipyAtRuntime below for the enforcement of that.
+    """
+
+    NPERSEG_VALUES = (512, 1024, 2048, 4096)
+
+    @pytest.fixture(autouse=True)
+    def _scipy(self):
+        self.stft = pytest.importorskip("scipy.signal").stft
+        self.istft = pytest.importorskip("scipy.signal").istft
+
+    @pytest.mark.parametrize("nperseg", NPERSEG_VALUES)
+    @pytest.mark.parametrize("extra_frames", [0, 3, 7])
+    def test_matches_on_lengths_not_divisible_by_hop(self, nperseg, extra_frames):
+        # noverlap = 3/4 nperseg, exactly recenter_bands's own hop - and a
+        # length that is NOT an integer number of hops past a frame
+        # boundary, so the padded=True end-padding path is exercised.
+        noverlap = nperseg * 3 // 4
+        hop = nperseg - noverlap
+        n = nperseg * 4 + extra_frames * hop + 17   # +17: not hop-aligned
+        rng = np.random.default_rng(nperseg * 1000 + extra_frames)
+        x = rng.standard_normal(n).astype(np.float64)
+
+        f1, t1, Z1 = self.stft(x, 48000, nperseg=nperseg, noverlap=noverlap)
+        f2, t2, Z2 = ic._stft(x, 48000, nperseg=nperseg, noverlap=noverlap)
+        assert f1.shape == f2.shape and np.array_equal(f1, f2)
+        assert np.array_equal(f2, np.fft.rfftfreq(nperseg, 1 / 48000))
+        assert t1.shape == t2.shape
+        assert np.max(np.abs(t1 - t2)) < 1e-12
+        assert Z1.shape == Z2.shape
+        assert np.max(np.abs(Z1 - Z2)) < 1e-9   # float64 round-off, not exactly 0
+
+        _, y1 = self.istft(Z1, 48000, nperseg=nperseg, noverlap=noverlap)
+        _, y2 = ic._istft(Z2, 48000, nperseg=nperseg, noverlap=noverlap)
+        assert y1.shape == y2.shape
+        assert np.max(np.abs(y1 - y2)) < 1e-9
+
+    @pytest.mark.parametrize("nperseg", NPERSEG_VALUES)
+    def test_matches_on_a_signal_shorter_than_nperseg(self, nperseg):
+        # scipy silently shrinks nperseg to len(x) here (with a warning) -
+        # noverlap must stay under the SHRUNK length or scipy itself
+        # raises, so pick one comfortably below the shortest length used.
+        n = max(3, nperseg // 5)
+        noverlap = 1
+        rng = np.random.default_rng(nperseg + 1)
+        x = rng.standard_normal(n).astype(np.float64)
+
+        with pytest.warns(UserWarning, match="nperseg"):
+            f1, t1, Z1 = self.stft(x, 48000, nperseg=nperseg, noverlap=noverlap)
+        f2, t2, Z2 = ic._stft(x, 48000, nperseg=nperseg, noverlap=noverlap)
+        assert Z1.shape == Z2.shape
+        assert Z1.shape[0] == n // 2 + 1   # freq axis: rfft of the clamped nperseg
+        assert np.max(np.abs(Z1 - Z2)) < 1e-9
+
+        _, y1 = self.istft(Z1, 48000, nperseg=n, noverlap=noverlap)
+        _, y2 = ic._istft(Z2, 48000, nperseg=n, noverlap=noverlap)
+        assert y1.shape == y2.shape
+        assert np.max(np.abs(y1 - y2)) < 1e-9
+
+    def test_matches_scipys_own_shape_mismatch_crash_on_a_stale_nperseg(self):
+        # The pre-existing edge case noted in incenter.py's STFT section:
+        # a caller (recenter_bands) can pass istft a nperseg that stft()
+        # itself had to shrink. scipy's istft doesn't catch this - it
+        # crashes with a numpy broadcast error. _istft must crash the
+        # same way, not silently produce a wrong-length result.
+        nperseg, noverlap, n = 512, 100, 450   # n < nperseg, noverlap < n
+        rng = np.random.default_rng(450)
+        x = rng.standard_normal(n).astype(np.float64)
+        with pytest.warns(UserWarning, match="nperseg"):
+            _, _, Z1 = self.stft(x, 48000, nperseg=nperseg, noverlap=noverlap)
+        _, _, Z2 = ic._stft(x, 48000, nperseg=nperseg, noverlap=noverlap)
+
+        with pytest.raises(ValueError, match="could not be broadcast"):
+            self.istft(Z1, 48000, nperseg=nperseg, noverlap=noverlap)
+        with pytest.raises(ValueError, match="could not be broadcast"):
+            ic._istft(Z2, 48000, nperseg=nperseg, noverlap=noverlap)
+
+    def test_matches_on_a_signal_of_exactly_one_sample(self):
+        # np.hanning/get_window special-case n<=1 to all-ones - the one
+        # place _hann_periodic's own special case (not the formula) has
+        # to be exercised for the two to agree.
+        nperseg, noverlap = 512, 0
+        x = np.array([0.37], dtype=np.float64)
+        with pytest.warns(UserWarning, match="nperseg"):
+            f1, t1, Z1 = self.stft(x, 48000, nperseg=nperseg, noverlap=noverlap)
+        f2, t2, Z2 = ic._stft(x, 48000, nperseg=nperseg, noverlap=noverlap)
+        assert Z1.shape == Z2.shape
+        assert np.max(np.abs(Z1 - Z2)) < 1e-9
+
+
+class TestNoScipyAtRuntime:
+    def test_incenter_module_imports_with_scipy_blocked(self):
+        """SciPy must be a test-only dependency - shipping code must
+        never import it, on any code path. Runs incenter.py's import in
+        a subprocess with scipy's real location hidden from it, rather
+        than trusting a grep for "import scipy", so this catches a
+        reintroduced import even inside a function body.
+        """
+        script = os.path.join(os.path.dirname(os.path.abspath(__file__)),
+                              "..", "incenter.py")
+        probe = (
+            "import runpy, sys\n"
+            "class _Blocker:\n"
+            "    def find_module(self, name, path=None):\n"
+            "        if name == 'scipy' or name.startswith('scipy.'):\n"
+            "            raise ImportError('scipy is blocked for this test')\n"
+            "        return None\n"
+            "sys.meta_path.insert(0, _Blocker())\n"
+            f"sys.argv = [{script!r}, '--version']\n"
+            f"runpy.run_path({script!r}, run_name='__main__')\n"
+        )
+        r = subprocess.run([sys.executable, "-c", probe],
+                           capture_output=True, text=True)
+        assert r.returncode == 0, (
+            f"incenter.py failed to run with scipy blocked\n"
+            f"stdout:\n{r.stdout}\nstderr:\n{r.stderr}"
+        )
+
+
 # --------------------------------------------------------------- diagnostics
 
 class TestRecenterBandsDiagnostics:

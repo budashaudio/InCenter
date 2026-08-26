@@ -118,7 +118,7 @@ end
 
 local DEVNULL = core.IS_WIN and "NUL" or "/dev/null"
 
--- Is this interpreter usable (has numpy+scipy)? On POSIX `path` is an
+-- Is this interpreter usable (has numpy)? On POSIX `path` is an
 -- absolute file we can stat first; on Windows some candidates are launcher
 -- commands ("py -3") resolved via PATH, so we skip the file check there and
 -- just try to run them. The import test is the real gate either way.
@@ -126,7 +126,7 @@ function core.python_has_deps(path)
   if not core.IS_WIN and not core.file_exists(path) then return false end
   -- `path` may be a command with args (e.g. "py -3"); don't quote it whole.
   local runner = core.IS_WIN and path or core.shell_quote(path)
-  local cmd = runner .. ' -c "import numpy, scipy" >' .. DEVNULL .. ' 2>&1'
+  local cmd = runner .. ' -c "import numpy" >' .. DEVNULL .. ' 2>&1'
   if core.IS_WIN then cmd = "cmd /c " .. cmd end
   local result = os.execute(cmd)
   return result == true or result == 0
@@ -136,20 +136,20 @@ end
 -- Homebrew/Linux thing; on Windows plain pip is fine.
 local function pip_hint(py)
   if core.IS_WIN then
-    return py .. " -m pip install numpy scipy"
+    return py .. " -m pip install numpy"
   end
-  return core.shell_quote(py) .. " -m pip install numpy scipy --break-system-packages"
+  return core.shell_quote(py) .. " -m pip install numpy --break-system-packages"
 end
 
 -- Find a working python3, preferring (in order):
 --   1. an explicit override the caller passes in (PYTHON_OVERRIDE)
 --   2. a previously cached working path in ExtState
---   3. the candidate list, probed for numpy+scipy
+--   3. the candidate list, probed for numpy
 -- The cache turns a multi-second probe on every launch into a single
 -- import check of one path. A stale/broken cached path falls through to
 -- a fresh scan. Returns path, nil on success or nil, error_message.
 -- Find a working Python. The expensive part - actually launching Python to
--- `import numpy, scipy` - is the ~same cost as a small DSP run, so we pay it
+-- `import numpy` - is the ~same cost as a small DSP run, so we pay it
 -- as rarely as possible:
 --   * A cached path from a previous successful run is TRUSTED without
 --     re-probing. That's the fast path hit on every normal Process press.
@@ -172,7 +172,7 @@ function core.find_python(override)
       return nil, "The Python path you set doesn't exist:\n" .. override
     end
     if not core.python_has_deps(override) then
-      return nil, "That Python has no numpy/scipy:\n" .. override ..
+      return nil, "That Python has no numpy:\n" .. override ..
         "\n\nInstall with:\n" .. pip_hint(override)
     end
     reaper.SetExtState(EXT_SECTION, "python_path", override, true)
@@ -192,10 +192,10 @@ function core.find_python(override)
     end
   end
 
-  return nil, "Found no Python 3 with numpy+scipy in the usual places.\n\n" ..
-    "Install them, e.g.:\n  " ..
-    (core.IS_WIN and "py -3 -m pip install numpy scipy"
-                 or "python3 -m pip install numpy scipy --break-system-packages") ..
+  return nil, "Found no Python 3 with numpy in the usual places.\n\n" ..
+    "Install it, e.g.:\n  " ..
+    (core.IS_WIN and "py -3 -m pip install numpy"
+                 or "python3 -m pip install numpy --break-system-packages") ..
     "\n\nor set PYTHON_OVERRIDE near the top of the panel script to the " ..
     "interpreter that has them (see INSTALL_Python.md)."
 end
@@ -502,9 +502,11 @@ end
 -- ---- batch runner ----------------------------------------------------
 
 -- Runs incenter.py once for every job in `jobs`. One process launch for
--- the whole batch instead of one per file: scipy's ~2s import is paid
--- once, and the UI (ExecProcess blocks the main thread) freezes for one
--- run instead of N back-to-back.
+-- the whole batch instead of one per file: numpy's import cost is paid
+-- once (scipy used to make this ~2s before it was removed as a
+-- dependency; numpy's own cost is well under that), and the UI
+-- (ExecProcess blocks the main thread) freezes for one run instead of N
+-- back-to-back.
 --   python       : interpreter path
 --   dsp          : full path to incenter.py
 --   jobs         : table { [job_key] = { src_path, start_sec, length_sec } }
