@@ -140,8 +140,9 @@ A few non-obvious decisions, in case you're reading the source:
 - **Nothing happens / REAPER seems frozen:** first check you loaded
   `BudashAudio_InCenter.lua`, **not** `incenter.py` (the most common
   mistake).
-- **"No Python 3 found":** install numpy+scipy in your Python 3 — see
-  [INSTALL_Python.md](INSTALL_Python.md).
+- **"No Python 3 found":** install numpy+scipy in your Python 3, or set
+  `PYTHON_OVERRIDE` near the top of `BudashAudio_InCenter.lua` to its
+  full path — see [INSTALL_Python.md](INSTALL_Python.md).
 - **The panel freezes while processing:** expected — `ExecProcess` blocks
   the main thread until the worker exits. Batching every selected item
   into one process launch keeps it as short as possible, but it isn't

@@ -22,6 +22,12 @@
 -- own merits (REAPER plumbing, not UI code). This file is the window and
 -- the settings.
 
+-- ---- user-editable settings ------------------------------------------
+-- If auto-detection can't find your python3 (the one with numpy+scipy),
+-- set its full path here, e.g. "/usr/local/bin/python3".
+local PYTHON_OVERRIDE = ""
+-- ----------------------------------------------------------------------
+
 -- Prefer APIExists over touching the field directly (cleaner check that a
 -- given API function is present in this REAPER build).
 local function has_api(name)
@@ -126,7 +132,7 @@ local function do_process()
     return
   end
 
-  local python, python_err = core.find_python()
+  local python, python_err = core.find_python(PYTHON_OVERRIDE)
   if not python then
     set_status({ "ERROR: no usable Python 3 found.", python_err or "" })
     return

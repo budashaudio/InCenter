@@ -192,17 +192,12 @@ function core.find_python(override)
     end
   end
 
-  -- The panel calls find_python() with no override, so a candidate scan
-  -- failing here is the end of the line - there's currently no UI or
-  -- ExtState-driven way to point InCenter at a non-standard interpreter
-  -- (the old batch script's PYTHON_OVERRIDE constant went with it when
-  -- it was removed). See INSTALL_Python.md for the reinstall-to-a-
-  -- standard-location fix.
   return nil, "Found no Python 3 with numpy+scipy in the usual places.\n\n" ..
     "Install them, e.g.:\n  " ..
     (core.IS_WIN and "py -3 -m pip install numpy scipy"
                  or "python3 -m pip install numpy scipy --break-system-packages") ..
-    "\n\nSee INSTALL_Python.md if none of the usual locations work."
+    "\n\nor set PYTHON_OVERRIDE near the top of the panel script to the " ..
+    "interpreter that has them (see INSTALL_Python.md)."
 end
 
 -- Forget the cached interpreter (call after a run fails, so the next
