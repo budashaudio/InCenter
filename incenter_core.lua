@@ -502,11 +502,9 @@ end
 -- ---- batch runner ----------------------------------------------------
 
 -- Runs incenter.py once for every job in `jobs`. One process launch for
--- the whole batch instead of one per file: numpy's import cost is paid
--- once (scipy used to make this ~2s before it was removed as a
--- dependency; numpy's own cost is well under that), and the UI
--- (ExecProcess blocks the main thread) freezes for one run instead of N
--- back-to-back.
+-- the whole batch instead of one per file: ExecProcess blocks REAPER's
+-- main thread until the worker exits, so this keeps the UI freeze to one
+-- run instead of N back-to-back.
 --   python       : interpreter path
 --   dsp          : full path to incenter.py
 --   jobs         : table { [job_key] = { src_path, start_sec, length_sec } }

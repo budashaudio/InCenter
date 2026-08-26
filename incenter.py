@@ -888,11 +888,11 @@ def _finalize_and_write(out_path, y, info, args, v):
 
 def run_batch(manifest_path, args, verbose):
     """Process every line in the manifest within this single process. This
-    is the point of --batch: numpy import is the dominant fixed cost per
-    process launch (well under a second, and independent of file length -
-    scipy used to make this ~2s before it was removed as a dependency),
-    so processing N files in one launch instead of N launches still turns
-    that Nx cost into a 1x cost. Per-line outcome is printed with a ##OK##/##ERR##
+    is the point of --batch: numpy import is a fixed cost per process
+    launch, independent of file length, so processing N files in one
+    launch instead of N launches still turns that Nx cost into a 1x cost
+    - just a smaller x than when scipy was still a dependency (~2s import
+    vs numpy's well under a second). Per-line outcome is printed with a ##OK##/##ERR##
     prefix so a caller (e.g. the REAPER Lua side) can parse results even
     with --verbose chatter interleaved.
 

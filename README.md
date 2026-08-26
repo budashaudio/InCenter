@@ -2,7 +2,7 @@
 
 A free, in-REAPER stereo re-centering tool for foley and field recordings
 that came off a portable recorder with the stereo image pulled to one
-side. It runs entirely inside your own REAPER session, at no cost.
+side. It runs entirely inside your own REAPER session.
 
 *by Budash Audio · v0.9.0 · MIT-licensed*
 
@@ -71,6 +71,8 @@ Select one or more stereo WAV items, open the InCenter panel, and set:
 - **Align** — on for spaced mics (AB); off for coincident mics (XY/MS),
   which have no timing offset to fix.
 - **Stereo width** — optional, narrows the image after centering.
+- **Width only (skip centering)** — applies stereo width reduction
+  without re-centering, for when you only want the narrowing.
 
 Press **Process selected item(s)**. Each item's take is repointed at a
 corrected file named `<name>_centered_<HHMMSS>.wav`, written to the
@@ -86,13 +88,12 @@ A few non-obvious decisions, in case you're reading the source:
   ctypes/libffi inside the embedded interpreter), so all processing shells
   out to your system Python via `reaper.ExecProcess` with a small wrapper
   script that captures the real exit code to a sidecar file.
-- **One `incenter.py` process per batch, not per file.** Interpreter
-  import is a fixed cost per launch, independent of file length (it used
-  to be the dominant one, ~2s, back when scipy was still a dependency -
-  see the "STFT (numpy)" section of incenter.py for why it no longer is),
-  so processing every unique source in a single `--batch` run still turns
-  an Nx cost into a 1x. `ExecProcess` blocks REAPER's UI thread while it
-  waits — that's normal, not a hang; the panel shows "Processing..."
+- **One `incenter.py` process per batch, not per file.** `ExecProcess`
+  blocks REAPER's UI thread until the worker exits, so N separate process
+  launches would mean N back-to-back freezes instead of one - processing
+  every unique source in a single `--batch` run keeps that down to one
+  blocking call (and lets the panel wrap the whole run in a single Undo
+  block). That's normal, not a hang; the panel shows "Processing..."
   first so you can see it started.
 - **Own WAV reader/writer instead of a library one.** scipy.io.wavfile
   (back when scipy was still a dependency) can't write 24-bit and drops
@@ -118,9 +119,9 @@ A few non-obvious decisions, in case you're reading the source:
   source that can't be decoded cleanly falls back to 32-bit float output.
 - **SECTION takes** (reversed or glued items) are skipped with a message —
   glue to a plain file first if you need to process one.
-- **Item region:** processing is scoped to the item's trimmed region (as
-  of 0.9.1) — an item covering the whole source file behaves as before,
-  and a trimmed item is measured and corrected using only its own content.
+- **Item region:** processing is scoped to the item's trimmed region — an
+  item covering the whole source file behaves as before, and a trimmed
+  item is measured and corrected using only its own content.
 - **Windows:** the macOS and Linux paths are the tested ones. Windows
   support is implemented but **experimental** — please report back if you
   run it there.
@@ -143,9 +144,12 @@ A few non-obvious decisions, in case you're reading the source:
 - **Nothing happens / REAPER seems frozen:** first check you loaded
   `BudashAudio_InCenter.lua`, **not** `incenter.py` (the most common
   mistake).
-- **"No Python 3 found":** install numpy in your Python 3, or set
-  `PYTHON_OVERRIDE` near the top of `BudashAudio_InCenter.lua` to its
-  full path — see [INSTALL_Python.md](INSTALL_Python.md).
+- **"No Python 3 found":** if you don't have a Python 3 with numpy
+  anywhere yet, install one — see [INSTALL_Python.md](INSTALL_Python.md).
+  If you already do (a pyenv, conda, or other custom-prefix install) but
+  InCenter still isn't finding it, that's because auto-detection only
+  checks the usual install locations — set `PYTHON_OVERRIDE` near the
+  top of `BudashAudio_InCenter.lua` to its full path instead.
 - **The panel freezes while processing:** expected — `ExecProcess` blocks
   the main thread until the worker exits. Batching every selected item
   into one process launch keeps it as short as possible, but it isn't
@@ -154,7 +158,7 @@ A few non-obvious decisions, in case you're reading the source:
 ## Running the tests
 
 `tests/test_incenter.py` covers the Python DSP engine (`pytest`);
-`tests/lua/incenter_core_spec.lua` covers the shared Lua core against a
+`tests/lua/incenter_core_spec.lua` covers the Lua core against a
 fake `reaper` API (`busted`). These are developer-only checks, separate
 from the runtime requirements above.
 
@@ -179,28 +183,21 @@ busted tests/lua --lpath="tests/lua/?.lua"
 ## Changelog
 
 - **0.9.0** — First public release. Per-band attack/tail centering,
-  GCC-PHAT alignment on the loudest region, auto window selection,
-  format- and metadata-preserving WAV I/O, output to the project media
-  folder, shared Lua core, control panel, batch action.
+  GCC-PHAT alignment on the loudest region, auto window selection, and
+  item-region processing (a trimmed item is measured and corrected using
+  only its own region of the source file, so a long recording with
+  several events at different stereo positions - e.g. radio chatter -
+  doesn't get averaged into one measurement). A "Width only" checkbox
+  applies stereo width reduction without re-centering. Diagnostic
+  reporting of what was measured after each run, format- and
+  metadata-preserving WAV I/O, output to the project media folder.
   Experimental Windows support.
-- **0.9.1** — Item-region processing: a trimmed item is now read, measured,
-  and corrected using only its own region of the source file, instead of
-  the whole file. This fixes the case where a long recording contains
-  several separate events at different stereo positions (e.g. radio
-  chatter) — previously an early near-centered event would dominate the
-  average and mask a badly off-center later one, making it unprocessable
-  piece by piece. Also: per-file diagnostic detail is now shown only for
-  single-item runs (a multi-item batch shows just the summary line); a new
-  "Width only" checkbox applies stereo width reduction without
-  re-centering, with a performance fix behind it (strength=0/tail=0 no
-  longer runs a needless STFT round trip); Stereo Width and "Width only"
-  no longer persist between sessions.
 
 ## Credits & reporting
 
 Built by Budash Audio. Bug reports and feedback are welcome — please
-include your OS, REAPER version, and the ReaScript console output if the
-panel showed an error.
+include your OS, REAPER version, and the text from the panel's status
+line if it showed an error.
 
 ## License
 
