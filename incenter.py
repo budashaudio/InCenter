@@ -802,10 +802,14 @@ def run_batch(manifest_path, args, verbose):
                 start_sec = float(start_str)
                 length_sec = float(length_str) if length_str != "" else None
             except ValueError:
-                print(f"##ERR##\t(line {line_no})\tmalformed manifest line")
+                # flush=True: stdout is redirected to a log file by the Lua
+                # wrapper, not a TTY, so Python block-buffers it - without an
+                # explicit flush a hard kill (worker timeout) loses buffered
+                # ##OK##/##ERR##/##DIAG## lines that were already written.
+                print(f"##ERR##\t(line {line_no})\tmalformed manifest line", flush=True)
                 continue
         else:
-            print(f"##ERR##\t(line {line_no})\tmalformed manifest line")
+            print(f"##ERR##\t(line {line_no})\tmalformed manifest line", flush=True)
             continue
         try:
             diag = process_one(in_path, out_path, args, verbose,
@@ -821,11 +825,11 @@ def run_batch(manifest_path, args, verbose):
                 )
                 # Machine channel the Lua side parses - always printed,
                 # regardless of --quiet (which only suppresses human chatter).
-                print(f"##DIAG##\t{out_path}\t{payload}")
-            print(f"##OK##\t{out_path}\t{in_path}")
+                print(f"##DIAG##\t{out_path}\t{payload}", flush=True)
+            print(f"##OK##\t{out_path}\t{in_path}", flush=True)
             ok_count += 1
         except Exception as e:
-            print(f"##ERR##\t{out_path}\t{e}")
+            print(f"##ERR##\t{out_path}\t{e}", flush=True)
 
     if verbose:
         print(f"batch done: {ok_count}/{len(lines)} file(s) ok")
