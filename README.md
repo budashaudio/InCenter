@@ -32,10 +32,8 @@ Everything installs together as one package:
 
 - `BudashAudio_InCenter.lua` — the control panel (sliders). **This is the
   one to load.**
-- `BudashAudio_InCenter (batch, no GUI).lua` — a one-shot action that
-  processes the selection using settings hardcoded near the top of the
-  file. No window, handy for a toolbar button or keyboard shortcut.
-- `incenter_core.lua` — shared code used by both. Not an action; don't
+- `incenter_core.lua` — the REAPER-side mechanics the panel calls into
+  (process runner, source-swap, Python finder). Not an action; don't
   load it directly.
 - `incenter.py` — the DSP engine. Not an action; runs as a subprocess.
   Don't load it directly (see the warning below).
@@ -46,18 +44,15 @@ Everything installs together as one package:
    REAPER `Scripts` folder. Subfolders are fine — each script locates
    itself and its siblings automatically, no fixed path is baked in.
 2. In REAPER: Actions -> Show action list -> New action -> Load ReaScript...
-   and pick `BudashAudio_InCenter.lua` (and/or the batch action).
-3. The control panel needs the **ReaImGui** extension (Extensions ->
-   ReaPack -> Browse packages -> search "ReaImGui"). The batch action does
-   not.
+   and pick `BudashAudio_InCenter.lua`.
+3. Requires the **ReaImGui** extension (Extensions -> ReaPack -> Browse
+   packages -> search "ReaImGui").
 4. Requires a system **Python 3** with `numpy` and `scipy`. If you don't
    already have these, follow **[INSTALL_Python.md](INSTALL_Python.md)** —
    a plain, step-by-step guide (no Python knowledge needed) for macOS,
-   Windows and Linux. Both scripts then auto-detect the interpreter — they
-   actually try `import numpy, scipy` in each candidate, so they won't pick
-   a Python that's missing the libraries. If none of the usual locations
-   work, set `PYTHON_OVERRIDE` near the top of the batch script to your
-   interpreter's full path (see the guide).
+   Windows and Linux. InCenter then auto-detects the interpreter — it
+   actually tries `import numpy, scipy` in each candidate, so it won't
+   pick a Python that's missing the libraries.
 
 **Do not load `incenter.py` or `incenter_core.lua` as REAPER actions.**
 They're dependencies, not standalone scripts. `incenter.py` only runs
@@ -67,8 +62,7 @@ hang REAPER. Both carry an `@noindex` tag so ReaPack won't list them.
 
 ## Use
 
-Select one or more stereo WAV items, open the InCenter panel (or run the
-batch action), and set:
+Select one or more stereo WAV items, open the InCenter panel, and set:
 
 - **Attack / Tail strength** — how hard to pull each part back to center
   (0-1). Tail 0 leaves the room/reverb tail where it is.
@@ -107,8 +101,10 @@ A few non-obvious decisions, in case you're reading the source:
   is the better trade.
 - **Peaks are rebuilt with the 3-phase `PCM_Source_BuildPeaks` protocol**
   after every source swap — without it the waveform doesn't redraw.
-- **Shared logic lives in `incenter_core.lua`**, so a fix to the process
-  runner, the source-swap, or the Python finder happens once, not twice.
+- **REAPER-side mechanics live in `incenter_core.lua`, not inline in the
+  panel.** The process runner, the source-swap, and the Python finder are
+  REAPER plumbing, not UI code — that separation is worth keeping on its
+  own merits, independent of how many scripts call into it.
 
 ## Known limitations
 
@@ -142,15 +138,14 @@ A few non-obvious decisions, in case you're reading the source:
 ## Troubleshooting
 
 - **Nothing happens / REAPER seems frozen:** first check you loaded
-  `BudashAudio_InCenter.lua` or the batch action, **not** `incenter.py`
-  (the most common mistake). If it's genuinely one of the actions, the
-  batch version prints a step-by-step trace to the ReaScript console
-  (right-click the action in the Action List for the console option).
-- **"No Python 3 found":** install numpy+scipy in your Python 3, or set
-  `PYTHON_OVERRIDE` near the top of the batch script to its full path.
-- **The batch action freezes the UI while processing:** expected —
-  `ExecProcess` blocks the main thread until the worker exits. Batching
-  keeps it as short as possible, but it isn't instant on long files.
+  `BudashAudio_InCenter.lua`, **not** `incenter.py` (the most common
+  mistake).
+- **"No Python 3 found":** install numpy+scipy in your Python 3 — see
+  [INSTALL_Python.md](INSTALL_Python.md).
+- **The panel freezes while processing:** expected — `ExecProcess` blocks
+  the main thread until the worker exits. Batching every selected item
+  into one process launch keeps it as short as possible, but it isn't
+  instant on long files.
 
 ## Running the tests
 

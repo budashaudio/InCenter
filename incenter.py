@@ -3,7 +3,7 @@
 # This file is a support/dependency script, not a standalone REAPER
 # action. Do not load it via Actions -> New action -> Load ReaScript.
 # It's meant to be invoked as a subprocess (with CLI args) by
-# incenter_ui.lua / incenter_items.lua, which sit next to it. Loading
+# BudashAudio_InCenter.lua, which sits next to it. Loading
 # it directly in REAPER runs it under REAPER's own embedded Python,
 # which cannot import numpy/scipy (see README.md) - at best you'll get
 # "ModuleNotFoundError: No module named 'numpy'", at worst a full hang.
@@ -239,7 +239,7 @@ def write_wav(path, x, info, force_float32=False):
 # angle across all of them, so trimming an item to one event and pressing
 # Process previously did nothing - the one line the user selected was
 # drowned in the file-wide average. --start/--length (seconds) let a
-# caller (the REAPER front-ends, or the CLI directly) process only the
+# caller (the REAPER front-end, or the CLI directly) process only the
 # item's region: read, correct, and write only that slice, independent of
 # whatever else is in the source file.
 

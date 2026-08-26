@@ -485,10 +485,14 @@ class TestBatchCliVerbose:
 
     Every other batch test calls run_batch() in-process with verbose=False,
     which is exactly how a NameError in the verbose-only summary line
-    survived: the batch action Lua script hardcodes VERBOSE = true, so the
-    only configuration that ships was the only one never exercised. These
+    survived: the only REAPER front-end that ever set verbose=True was a
+    no-GUI batch script (since removed - it's now unreachable from REAPER
+    at all, only from a manual `incenter.py --batch ...` call), so the
+    one configuration that shipped was the one nothing exercised. These
     tests drive the real CLI in a subprocess so the process exit code -
-    what the Lua side actually keys on - is part of the assertion.
+    what a caller parsing the log actually keys on - is part of the
+    assertion, and keep the verbose --batch path itself covered even
+    though no current front-end reaches it.
     """
 
     def _write_source(self, path, sr=48000, dur=0.3):
@@ -508,8 +512,9 @@ class TestBatchCliVerbose:
         )
 
     def test_verbose_batch_exits_zero_and_prints_summary(self, tmp_path):
-        # No --quiet, so verbose is on - the configuration the batch action
-        # ships with. Two lines, so a wrong count is visible as well as a crash.
+        # No --quiet, so verbose is on - the configuration the now-removed
+        # batch script used to ship with. Two lines, so a wrong count is
+        # visible as well as a crash.
         for name in ("a", "b"):
             self._write_source(tmp_path / f"{name}.wav")
         manifest = tmp_path / "manifest.txt"

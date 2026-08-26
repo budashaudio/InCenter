@@ -2,7 +2,6 @@
 -- @version 0.9.0
 -- @author Budash Audio
 -- @provides
---   [main] BudashAudio_InCenter (batch, no GUI).lua
 --   incenter_core.lua
 --   incenter.py
 -- @about
@@ -19,8 +18,9 @@
 -- Copyright (c) 2026 Budash Audio
 --
 -- ReaImGui control panel: sliders instead of editing constants. All the
--- REAPER-side mechanics live in incenter_core.lua (shared with the batch
--- action). This file is the window and the settings.
+-- REAPER-side mechanics live in incenter_core.lua, kept separate on its
+-- own merits (REAPER plumbing, not UI code). This file is the window and
+-- the settings.
 
 -- Prefer APIExists over touching the field directly (cleaner check that a
 -- given API function is present in this REAPER build).
@@ -69,7 +69,7 @@ do
 end
 
 -- ---- settings (persisted between sessions via ExtState) --------------
-local EXT_SECTION = "incenter"   -- shared with the core / batch action
+local EXT_SECTION = "incenter"   -- shared with incenter_core.lua's own ExtState reads
 
 -- Window options: index 0 is Auto (let incenter.py pick from the detected
 -- sound length); the rest map to explicit STFT sizes.

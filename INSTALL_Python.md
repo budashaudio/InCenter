@@ -125,26 +125,17 @@ python3 -c "import numpy, scipy; print('OK, InCenter is ready')"
 
 InCenter searches the usual install locations automatically. If you have a
 working Python 3 (with NumPy and SciPy) but InCenter doesn't find it, it's
-almost always because it lives somewhere unusual. Two ways to fix it:
+almost always because it lives somewhere unusual.
 
-**Easiest — reinstall from python.org.** Following Step 1 above installs
-Python where InCenter already looks, so a fresh install from the official
+**Reinstall from python.org.** Following Step 1 above installs Python
+where InCenter already looks, so a fresh install from the official
 installer is usually all it takes.
 
-**Manual — point the script at it.** Find your Python's full path:
-
-- macOS/Linux: `which python3`
-- Windows: `where python`
-
-Copy the path it prints. Then open the batch script
-`BudashAudio_InCenter (batch, no GUI).lua` in a text editor and set the
-`PYTHON_OVERRIDE` line near the top to that path, e.g.:
-
-```
-local PYTHON_OVERRIDE = "/usr/local/bin/python3"
-```
-
-InCenter will then use exactly that interpreter.
+There is currently no way to manually point InCenter at a non-standard
+Python location — that option lived in a since-removed batch script and
+went with it. If reinstalling doesn't fix detection, please open an issue
+(see the repo's Credits & reporting section) rather than editing the
+scripts by hand.
 
 ---
 
@@ -158,5 +149,6 @@ it:
 python3 -m pip install numpy scipy
 ```
 
-If InCenter doesn't auto-detect that interpreter, set its path via
-`PYTHON_OVERRIDE` as described just above.
+If InCenter doesn't auto-detect that interpreter, see the note above —
+there's currently no manual override; the fix is to also have (or link)
+a Python in one of the auto-detected locations.

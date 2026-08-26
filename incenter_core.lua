@@ -6,13 +6,14 @@
 -- Copyright (c) 2026 Budash Audio
 --
 -- This file is NOT a standalone REAPER action. It holds the REAPER-side
--- mechanics shared by the two front-ends:
---   * BudashAudio_InCenter.lua              (ReaImGui control panel)
---   * BudashAudio_InCenter (batch, no GUI).lua
--- Both do `local core = dofile(script_dir .. "/incenter_core.lua")` and
--- call into the table it returns. Keeping it in one place means a fix to
--- the process runner, the source-swap, or the Python finder happens once
--- instead of being copied between two files that then drift apart.
+-- mechanics for the control panel, BudashAudio_InCenter.lua, which does
+-- `local core = dofile(script_dir .. "/incenter_core.lua")` and calls
+-- into the table it returns. Kept in its own file rather than inlined
+-- into the panel on its own merits, not just to share it: the process
+-- runner, the source-swap, and the Python finder are REAPER plumbing,
+-- not UI code, and that separation is worth keeping even with a single
+-- caller. (A second, no-GUI caller used to exist and was removed as an
+-- unused, duplicated-maintenance surface.)
 
 local core = {}
 
@@ -89,7 +90,7 @@ end
 
 -- ---- python discovery (with ExtState cache) --------------------------
 
-local EXT_SECTION = "incenter"   -- shared across both front-ends
+local EXT_SECTION = "incenter"   -- shared with the panel's own ExtState reads
 
 -- Candidate interpreters, per platform. On POSIX these are absolute paths.
 -- On Windows we include both the "py" launcher and a bare "python", which
@@ -191,12 +192,17 @@ function core.find_python(override)
     end
   end
 
+  -- The panel calls find_python() with no override, so a candidate scan
+  -- failing here is the end of the line - there's currently no UI or
+  -- ExtState-driven way to point InCenter at a non-standard interpreter
+  -- (the old batch script's PYTHON_OVERRIDE constant went with it when
+  -- it was removed). See INSTALL_Python.md for the reinstall-to-a-
+  -- standard-location fix.
   return nil, "Found no Python 3 with numpy+scipy in the usual places.\n\n" ..
     "Install them, e.g.:\n  " ..
     (core.IS_WIN and "py -3 -m pip install numpy scipy"
                  or "python3 -m pip install numpy scipy --break-system-packages") ..
-    "\n\nor set PYTHON_OVERRIDE near the top of the batch script to the " ..
-    "interpreter that has them (see INSTALL_Python.md)."
+    "\n\nSee INSTALL_Python.md if none of the usual locations work."
 end
 
 -- Forget the cached interpreter (call after a run fails, so the next
@@ -334,7 +340,7 @@ end
 -- spread=6.80;win=2048;bands=24", see incenter.py's run_batch) into one
 -- human-readable status line. Returns nil if the payload doesn't parse -
 -- the diag line is optional decoration, never a hard dependency, so a
--- malformed/absent one must not break either front-end.
+-- malformed/absent one must not break the front-end.
 function core.format_diag(payload)
   local v = {}
   for key, val in (payload or ""):gmatch("([%a_]+)=([^;]*)") do
