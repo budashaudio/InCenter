@@ -133,12 +133,17 @@ function core.python_has_deps(path)
 end
 
 -- pip install hint, platform-appropriate. --break-system-packages is a
--- Homebrew/Linux thing; on Windows plain pip is fine.
+-- Homebrew/Linux thing; on Windows plain pip is fine. Leads with a
+-- terminal-opening instruction: a user who has never opened a terminal
+-- has no way to know that's where a pasteable command goes. Wording
+-- matches Step 2 of INSTALL_Python.md's macOS/Windows sections.
 local function pip_hint(py)
   if core.IS_WIN then
-    return py .. " -m pip install numpy"
+    return "Open Command Prompt (press the Windows key, type cmd, press Enter), then paste:\n  " ..
+      py .. " -m pip install numpy"
   end
-  return core.shell_quote(py) .. " -m pip install numpy --break-system-packages"
+  return "Open Terminal (press Cmd+Space, type Terminal, press Enter), then paste:\n  " ..
+    core.shell_quote(py) .. " -m pip install numpy --break-system-packages"
 end
 
 -- Find a working python3, preferring (in order):
@@ -173,7 +178,7 @@ function core.find_python(override)
     end
     if not core.python_has_deps(override) then
       return nil, "That Python has no numpy:\n" .. override ..
-        "\n\nInstall with:\n" .. pip_hint(override)
+        "\n\n" .. pip_hint(override)
     end
     reaper.SetExtState(EXT_SECTION, "python_path", override, true)
     return override
@@ -193,9 +198,9 @@ function core.find_python(override)
   end
 
   return nil, "Found no Python 3 with numpy in the usual places.\n\n" ..
-    "Install it, e.g.:\n  " ..
-    (core.IS_WIN and "py -3 -m pip install numpy"
-                 or "python3 -m pip install numpy --break-system-packages") ..
+    (core.IS_WIN
+      and "Open Command Prompt (press the Windows key, type cmd, press Enter), then paste:\n  py -3 -m pip install numpy"
+      or "Open Terminal (press Cmd+Space, type Terminal, press Enter), then paste:\n  python3 -m pip install numpy --break-system-packages") ..
     "\n\nor set PYTHON_OVERRIDE near the top of the panel script to the " ..
     "interpreter that has them (see INSTALL_Python.md)."
 end

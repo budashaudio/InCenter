@@ -386,6 +386,68 @@ describe("incenter_core", function()
       assert.equal(tmp, _G.reaper.GetExtState("incenter", "python_path"))
       os.remove(tmp)
     end)
+
+    -- A user who has never opened a terminal has no way to know a
+    -- pasteable install command needs one first - both the "no Python
+    -- at all" and "override has no numpy" errors must say where to
+    -- paste it, in a platform-appropriate way, before the command.
+    it("tells a macOS user how to open Terminal before the pip command", function()
+      local core = load_core()
+      core.python_has_deps = function() return false end
+
+      local _, err = core.find_python(nil)
+      local open_at = err:find("Open Terminal %(press Cmd%+Space, type Terminal, press Enter%), then paste:")
+      local cmd_at = err:find("python3 %-m pip install numpy", 1, false)
+      assert.truthy(open_at)
+      assert.truthy(cmd_at)
+      assert.is_true(open_at < cmd_at)
+    end)
+
+    it("tells a Windows user how to open Command Prompt before the pip command", function()
+      local core = load_core({ GetOS = function() return "Win64" end })
+      core.python_has_deps = function() return false end
+
+      local _, err = core.find_python(nil)
+      local open_at = err:find(
+        "Open Command Prompt %(press the Windows key, type cmd, press Enter%), then paste:")
+      local cmd_at = err:find("py %-3 %-m pip install numpy", 1, false)
+      assert.truthy(open_at)
+      assert.truthy(cmd_at)
+      assert.is_true(open_at < cmd_at)
+    end)
+
+    it("also gives the Terminal instruction for a macOS override with no numpy", function()
+      local core = load_core()
+      local tmp = os.tmpname()
+      local f = io.open(tmp, "w"); f:write("x"); f:close()
+      core.python_has_deps = function() return false end
+
+      local _, err = core.find_python(tmp)
+      assert.truthy(err:find(
+        "Open Terminal %(press Cmd%+Space, type Terminal, press Enter%), then paste:"))
+      os.remove(tmp)
+    end)
+
+    it("also gives the Command Prompt instruction for a Windows override with no numpy", function()
+      local core = load_core({ GetOS = function() return "Win64" end })
+      local tmp = os.tmpname()
+      local f = io.open(tmp, "w"); f:write("x"); f:close()
+      core.python_has_deps = function() return false end
+
+      local _, err = core.find_python(tmp)
+      assert.truthy(err:find(
+        "Open Command Prompt %(press the Windows key, type cmd, press Enter%), then paste:"))
+      os.remove(tmp)
+    end)
+
+    it("does NOT add a terminal instruction to the override-path-not-found error", function()
+      -- Different error (a path problem, not a missing-library problem) -
+      -- out of scope for this change.
+      local core = load_core()
+      local _, err = core.find_python("/definitely/not/there/python3")
+      assert.is_nil(err:find("Open Terminal"))
+      assert.is_nil(err:find("Open Command Prompt"))
+    end)
   end)
 
   describe("clear_python_cache", function()
