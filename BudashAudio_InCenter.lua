@@ -344,11 +344,44 @@ local function loop()
     want_apply_dock = false
   end
 
-  -- When docked, AlwaysAutoResize fights the dock's fixed size, so only use
-  -- it while floating.
   local floating = (dock_id == 0)
-  local flags = floating and reaper.ImGui_WindowFlags_AlwaysAutoResize() or 0
-  local visible, open = reaper.ImGui_Begin(ctx, 'InCenter', true, flags)
+
+  -- No longer requesting WindowFlags_AlwaysAutoResize here (it used to be
+  -- applied while floating). It wasn't doing its job: every slider/combo/
+  -- button below has no explicit width, so they fill whatever width the
+  -- window currently has rather than asking for one - there is no tight
+  -- "content size" for auto-resize to converge on. In practice that made
+  -- it sticky, not auto-fitting: a frame where the window happened to be
+  -- wider (a drag, a wider wrapped warning line) got baked back in as
+  -- next frame's "content size", so the window neither settled at a
+  -- minimal size nor stopped a manual drag - which is what was actually
+  -- observed (wider than content, dead space at the bottom) and is also
+  -- why dragging it into a bad shape was possible at all despite the
+  -- flag being set. It would also now fight SetNextWindowSizeConstraints
+  -- below (both try to own the size every frame). The constraints plus
+  -- the FirstUseEver default below replace it and do the job it was
+  -- meant to.
+
+  -- Default size (365x825, Nikita's measured figure) on a fresh install
+  -- only - Cond_FirstUseEver is a no-op once ImGui's own ini has ever
+  -- recorded a size for this window, so an existing user's remembered
+  -- size is untouched. Skipped while docked: the dock decides the size
+  -- there, same reasoning as the resize constraints below.
+  if floating and reaper.ImGui_SetNextWindowSize and reaper.ImGui_Cond_FirstUseEver then
+    reaper.ImGui_SetNextWindowSize(ctx, 365, 825, reaper.ImGui_Cond_FirstUseEver())
+  end
+
+  -- Keep the panel a narrow vertical column: wide enough that the
+  -- longest control label doesn't clip, narrow enough that there's no
+  -- reason to stretch it across a monitor. Height stays generous - the
+  -- status area can grow past the fixed controls' height with skip:
+  -- lines on a multi-item batch, and this must never fight that.
+  -- Docked: same as above, the dock owns the size, so skip this too.
+  if floating and reaper.ImGui_SetNextWindowSizeConstraints then
+    reaper.ImGui_SetNextWindowSizeConstraints(ctx, 300, 600, 600, 100000)
+  end
+
+  local visible, open = reaper.ImGui_Begin(ctx, 'InCenter', true, 0)
 
   -- Track dock changes and remember them across sessions.
   if reaper.ImGui_GetWindowDockID then
