@@ -245,6 +245,43 @@ describe("incenter_core", function()
       assert.is_nil(core.format_diag(""))
       assert.is_nil(core.format_diag(nil))
     end)
+
+    -- attack == tail (exactly) is how a collapsed measurement (signal
+    -- too short for a separate attack/tail split - see
+    -- recenter_bands) shows up on the wire. These must never read as a
+    -- real "attack X / tail X" measurement.
+    it("says 'single angle' for a collapsed off-centre measurement, not attack/tail", function()
+      local line = core.format_diag(
+        "offset=-26.56;attack=18.44;tail=18.44;spread=0.00;win=512;bands=20")
+      assert.truthy(line:match("single angle"))
+      assert.truthy(line:match("too short for a separate attack/tail split"))
+      assert.is_nil(line:match("18%.44.*/.*18%.44"))   -- no fabricated pair
+      assert.truthy(line:match("left"))
+      assert.truthy(line:match("26%.6"))
+    end)
+
+    it("says 'single angle' for a collapsed centred measurement too", function()
+      local line = core.format_diag(
+        "offset=+0.30;attack=45.30;tail=45.30;spread=0.50;win=512;bands=20")
+      assert.truthy(line:match("already centred"))
+      assert.truthy(line:match("single angle"))
+      assert.truthy(line:match("nothing to correct"))
+    end)
+
+    it("does not say 'single angle' for a genuine (non-collapsed) measurement", function()
+      local line = core.format_diag(
+        "offset=+3.24;attack=48.24;tail=44.10;spread=6.80;win=2048;bands=24")
+      assert.is_nil(line:match("single angle"))
+    end)
+
+    it("keeps reporting per-band spread on a collapsed measurement", function()
+      -- spread_deg is still a valid, independently-measured number when
+      -- collapsed (see recenter_bands) - it must not get dropped just
+      -- because the wording changed.
+      local line = core.format_diag(
+        "offset=-10.00;attack=35.00;tail=35.00;spread=4.20;win=512;bands=20")
+      assert.truthy(line:match("4%.2"))
+    end)
   end)
 
   describe("output_dir", function()

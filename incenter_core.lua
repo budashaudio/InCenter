@@ -353,17 +353,36 @@ function core.format_diag(payload)
   if not (offset and attack and tail and spread) then return nil end
   local win = v.win or "?"
 
+  -- tail == attack (exactly) is recenter_bands' signal that it collapsed
+  -- the attack/tail split: the signal was too short to have a separate
+  -- tail to measure, not that a tail was measured and happened to match
+  -- the attack angle. Worded separately below rather than printed as
+  -- "attack X / tail X", which would read as a real measurement.
+  local collapsed = (tail == attack)
+
   -- The exact case this whole feature exists for: a symmetric scene (or
   -- one where the source moves across the base) measures near zero, and
   -- that is the correct result, not a failure - say so plainly rather
   -- than showing numbers that look like "nothing happened".
   if math.abs(offset) < 1.0 and spread < 2.0 then
+    if collapsed then
+      return string.format(
+        "Measured: already centred (%.1f\194\176 off, per-band spread %.1f\194\176) " ..
+        "\226\128\148 single angle (too short for a separate attack/tail split), " ..
+        "nothing to correct.", math.abs(offset), spread)
+    end
     return string.format(
       "Measured: already centred (%.1f\194\176 off, per-band spread %.1f\194\176) " ..
       "\226\128\148 nothing to correct.", math.abs(offset), spread)
   end
 
   local dir = offset >= 0 and "right" or "left"
+  if collapsed then
+    return string.format(
+      "Measured: image %.1f\194\176 %s (single angle \226\128\148 too short for a " ..
+      "separate attack/tail split), per-band spread %.1f\194\176, window %s.",
+      math.abs(offset), dir, spread, win)
+  end
   return string.format(
     "Measured: image %.1f\194\176 %s (attack %.1f\194\176 / tail %.1f\194\176), " ..
     "per-band spread %.1f\194\176, window %s.",
