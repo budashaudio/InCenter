@@ -103,8 +103,8 @@ end
 local strength      = load_num("strength", 1.0)
 local tail_strength = load_num("tail_strength", 1.0)
 -- Stereo Width and "Width only" are NOT persisted, unlike everything else
--- on this panel: occasional-use settings Nikita has been forgetting were
--- left on from a previous session, causing unexpected results next time.
+-- on this panel: they're occasional-use settings, easy to leave on from a
+-- previous session and forget about, causing unexpected results next time.
 -- Both always start at their default, regardless of ExtState.
 local collapse      = 0.0
 local win_idx       = math.floor(load_num("win_idx", 0))   -- 0 = Auto
@@ -362,11 +362,12 @@ local function loop()
   -- the FirstUseEver default below replace it and do the job it was
   -- meant to.
 
-  -- Default size (365x825, Nikita's measured figure) on a fresh install
-  -- only - Cond_FirstUseEver is a no-op once ImGui's own ini has ever
-  -- recorded a size for this window, so an existing user's remembered
-  -- size is untouched. Skipped while docked: the dock decides the size
-  -- there, same reasoning as the resize constraints below.
+  -- Default size (365x825, measured against the panel's actual rendered
+  -- content, not a guess) on a fresh install only - Cond_FirstUseEver is
+  -- a no-op once ImGui's own ini has ever recorded a size for this
+  -- window, so an existing user's remembered size is untouched. Skipped
+  -- while docked: the dock decides the size there, same reasoning as the
+  -- resize constraints below.
   if floating and reaper.ImGui_SetNextWindowSize and reaper.ImGui_Cond_FirstUseEver then
     reaper.ImGui_SetNextWindowSize(ctx, 365, 825, reaper.ImGui_Cond_FirstUseEver())
   end

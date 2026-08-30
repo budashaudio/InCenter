@@ -137,7 +137,7 @@ the missing information come from this time?
 **Status:** hypothesis disproven at the measurement step. Nothing built.
 
 **What was proposed:** the first Process press of a session takes
-noticeably longer than later ones — Nikita measures roughly 4 seconds.
+noticeably longer than later ones — measured at roughly 4 seconds.
 The suspected cause was a cold OS disk cache for `scipy`'s dozens of
 compiled extension modules: first import reads them from disk, later
 ones hit the page cache. The proposed fix was a fire-and-forget
