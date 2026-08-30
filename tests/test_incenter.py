@@ -1,6 +1,7 @@
 """Unit tests for the incenter.py DSP engine."""
 import argparse
 import os
+import re
 import signal
 import struct
 import subprocess
@@ -995,6 +996,145 @@ class TestRecenterBandsDiagnostics:
         assert diag["spread_deg"] == pytest.approx(0.0)
 
 
+class TestRecenterBandsShortSignals:
+    """Regression coverage for the three short-signal crash points fixed
+    on fix/small-window-crash (docks/TASK ... small window crash), plus
+    the floor below which recenter_bands still refuses. Each case's
+    parameters were verified (via `git stash`) to reproduce the exact
+    pre-fix crash text before this fix landed - see the commit body.
+    n_bands=24 (the default) is deliberately NOT special-cased anywhere
+    here: Step 1 established it's not a causal factor in any of these.
+    """
+
+    def _rng_stereo(self, n, seed=3, amp=0.1):
+        rng = np.random.default_rng(seed)
+        return rng.standard_normal((n, 2)) * amp
+
+    def test_crash_1_noverlap_reconciled_not_refused(self):
+        # Pre-fix: _stft's OWN noverlap check ("noverlap must be less
+        # than nperseg.") fires, because noverlap is 3/4 of the
+        # UNSHRUNK nperseg (3072) while _stft has just shrunk nperseg
+        # itself to len(x) (1024) - 3072 >= 1024. len(x)=1024 is
+        # deliberately AT the floor (not below it), so this proves the
+        # reconciliation fix, not the floor, resolves it.
+        sr = 48000
+        n, nperseg = 1024, 4096
+        x = self._rng_stereo(n)
+        y, diag = ic.recenter_bands(x, sr, strength=1.0, n_bands=24,
+                                    nperseg=nperseg, verbose=False)
+        assert y.shape == x.shape
+        assert diag["win"] == n   # reconciled down to what _stft could use
+
+    def test_bug_a_istft_window_reconciled_not_refused(self):
+        # Pre-fix: _istft raised "operands could not be broadcast
+        # together with shapes (1800,) (2048,)" - _stft shrank nperseg
+        # to len(x)=1800 internally, but recenter_bands still handed
+        # _istft the original, unshrunk 2048. len(x)=1800 keeps
+        # noverlap(1536) < len(x), so _stft's own check does NOT fire
+        # here - this isolates the istft-side disagreement specifically.
+        # Not collapsed either (enough frames for a real split), so this
+        # proves the reconciliation fix in isolation from the collapse fix.
+        sr = 48000
+        n, nperseg = 1800, 2048
+        x = self._rng_stereo(n)
+        y, diag = ic.recenter_bands(x, sr, strength=1.0, n_bands=24,
+                                    nperseg=nperseg, verbose=False)
+        assert y.shape == x.shape
+        assert diag["win"] == n
+        assert diag["attack_deg"] != diag["tail_deg"]   # real split, not collapsed
+
+    def test_bug_b_mask_smoothing_collapses_not_refused(self):
+        # Pre-fix: "operands could not be broadcast together with shapes
+        # (200,) (220,)" - np.convolve(mask, kernel, mode="same") grew
+        # mask past n_frames once the ~30ms kernel outgrew the frame
+        # count. len(x)=1100 > nperseg=512, so no shrink applies at all
+        # here (nperseg stays 512 unchanged) - this isolates the
+        # collapse fix specifically from the reconciliation fix above.
+        sr = 48000
+        n, nperseg = 1100, 512
+        x = self._rng_stereo(n)
+        y, diag = ic.recenter_bands(x, sr, strength=1.0, n_bands=24,
+                                    nperseg=nperseg, verbose=False)
+        assert y.shape == x.shape
+        assert diag["win"] == nperseg   # no shrink needed here
+        assert diag["attack_deg"] == diag["tail_deg"]   # collapsed: honest, not fabricated
+
+    def test_below_floor_raises_clear_valueerror_not_a_broadcast_string(self):
+        sr = 48000
+        n = ic._MIN_REGION_SAMPLES - 1
+        x = self._rng_stereo(n)
+        with pytest.raises(ValueError, match="too short to process"):
+            ic.recenter_bands(x, sr, strength=1.0, n_bands=24, nperseg=512, verbose=False)
+        # and definitely not the old raw numpy text a caller would have
+        # had to parse to even recognize this as "too short":
+        try:
+            ic.recenter_bands(x, sr, strength=1.0, n_bands=24, nperseg=512, verbose=False)
+        except ValueError as e:
+            assert "broadcast" not in str(e)
+            assert "noverlap" not in str(e)
+
+    def test_at_floor_exactly_succeeds(self):
+        sr = 48000
+        n = ic._MIN_REGION_SAMPLES
+        x = self._rng_stereo(n)
+        y, diag = ic.recenter_bands(x, sr, strength=1.0, n_bands=24,
+                                    nperseg=512, verbose=False)
+        assert y.shape == x.shape
+
+    def test_collapsed_correction_matches_a_single_measured_angle(self):
+        # The audio-behaviour claim, not just "it doesn't crash": for a
+        # short click panned off-centre, the whole signal should be
+        # pulled by ONE measured angle - the same check the moving-axis
+        # experiment used to validate its own mechanism.
+        sr = 48000
+        n = 1150
+        t = np.arange(n) / sr
+        left = 0.3 * np.sin(2 * np.pi * 1000 * t)
+        right = 0.1 * np.sin(2 * np.pi * 1000 * t)
+        x = stereo(left, right)
+        y, diag = ic.recenter_bands(x, sr, strength=1.0, n_bands=24,
+                                    nperseg=512, verbose=False)
+        assert diag["attack_deg"] == diag["tail_deg"]
+        # a real correction happened - the off-centre pan measurably
+        # moved toward centre, not a no-op
+        el, er = np.sum(y[:, 0] ** 2), np.sum(y[:, 1] ** 2)
+        out_angle = np.degrees(np.arctan2(np.sqrt(er), np.sqrt(el)))
+        assert abs(out_angle - 45.0) < abs(diag["offset_deg"])
+
+    def test_tail_strength_has_no_effect_when_collapsed(self):
+        # Brief's own framing: tail_strength is "now inapplicable" for a
+        # collapsed item - verify that's actually true of the output,
+        # not just asserted in a comment.
+        sr = 48000
+        n = 1150
+        x = self._rng_stereo(n, amp=0.2)
+        y_tail_0, diag_0 = ic.recenter_bands(x, sr, strength=1.0, tail_strength=0.0,
+                                             n_bands=24, nperseg=512, verbose=False)
+        y_tail_1, diag_1 = ic.recenter_bands(x, sr, strength=1.0, tail_strength=1.0,
+                                             n_bands=24, nperseg=512, verbose=False)
+        assert diag_0["attack_deg"] == diag_0["tail_deg"]
+        assert diag_1["attack_deg"] == diag_1["tail_deg"]
+        np.testing.assert_array_equal(y_tail_0, y_tail_1)
+
+    def test_reconciled_oversized_windows_all_agree(self):
+        # A 1024-sample file requesting --win 1024/2048/4096 should all
+        # reconcile to the same effective nperseg (1024) and therefore
+        # produce identical output - exactly what the golden-corpus
+        # sweep found (j_win_1024_exact/2048/4096_pathological all
+        # SHA-256-identical post-fix).
+        sr = 48000
+        n = 1024
+        x = self._rng_stereo(n)
+        outputs = []
+        for nperseg in (1024, 2048, 4096):
+            y, diag = ic.recenter_bands(x.copy(), sr, strength=1.0, n_bands=24,
+                                        nperseg=nperseg, verbose=False)
+            assert diag["win"] == 1024
+            outputs.append(y)
+        np.testing.assert_array_equal(outputs[0], outputs[1])
+        np.testing.assert_array_equal(outputs[0], outputs[2])
+
+
 # --------------------------------------------------------------- pipeline
 
 class TestIsBypass:
@@ -1088,6 +1228,28 @@ class TestProcessOnePipeline:
         assert "measured:" in out
         assert "offset" in out
         assert "spread" in out
+
+    def test_verbose_measured_line_is_honest_about_a_collapsed_item(self, tmp_path, capsys):
+        # A short click must never print "attack X / tail Y" - that
+        # reads as two real measurements when only one was made.
+        sr = 48000
+        n = 1150
+        t = np.arange(n) / sr
+        x = stereo(0.3 * np.sin(2 * np.pi * 1000 * t), 0.1 * np.sin(2 * np.pi * 1000 * t))
+        info = ic.WavInfo(sr=sr, audio_fmt=1, bits=16, ch=2, extra_chunks=[])
+        in_path = tmp_path / "in.wav"
+        ic.write_wav(str(in_path), x, info)
+        out_path = tmp_path / "out.wav"
+        args = default_args(strength=1.0, tail_strength=1.0, collapse=0.0, align=False)
+        ic.process_one(str(in_path), str(out_path), args, verbose=True)
+        out = capsys.readouterr().out
+        measured_line = next(l for l in out.splitlines() if l.startswith("measured:"))
+        assert "single angle" in measured_line
+        assert "too short for a separate attack/tail split" in measured_line
+        # The line explaining collapse legitimately says "attack/tail
+        # split" - what it must NOT do is print a fabricated numeric
+        # pair like the old "(attack 18.44d / tail 18.44d)".
+        assert not re.search(r"attack [\d.+-]+d\s*/\s*tail [\d.+-]+d", measured_line)
 
     def test_collapse_without_align_warns(self, tmp_path, capsys):
         sr = 44100

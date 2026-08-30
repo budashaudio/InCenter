@@ -633,6 +633,23 @@ def recenter_bands(x, sr, strength, n_bands=24, nperseg=4096,
     each band gets two angles (attack-weighted, tail-weighted) and the
     correction crossfades between them frame by frame.
 
+    A signal too short to produce as many STFT frames as the ~30ms
+    attack/tail smoothing kernel needs has no "tail" to speak of - there
+    is nothing to crossfade with, and forcing the crossfade would be
+    happening over a span shorter than the crossfade itself. Such signals
+    are treated as attack-only: one angle is measured and applied
+    uniformly (tail_strength has no effect on them), and diag reports
+    tail_deg == attack_deg exactly - the signal that no separate tail was
+    measured, not that one was measured and happened to equal the attack
+    angle. See format_diag (Lua) and the "measured:" print in
+    process_one for how that distinction is worded to the user; neither
+    ever prints a tail angle that wasn't actually measured.
+
+    Raises ValueError if x is shorter than _MIN_REGION_SAMPLES - the same
+    floor _apply_region uses, for the same reason: below it there is
+    genuinely nothing to analyze, and a region cut and a naturally-short
+    whole file should get one consistent answer, not two different ones.
+
     Returns (y, diag). diag is a plain dict reporting what was measured -
     offset_deg/attack_deg/tail_deg/spread_deg/win/n_bands - so a caller can
     tell "measured no offset, applied nothing" apart from "broken", even
@@ -641,6 +658,31 @@ def recenter_bands(x, sr, strength, n_bands=24, nperseg=4096,
     """
     if tail_strength is None:
         tail_strength = strength
+
+    if len(x) < _MIN_REGION_SAMPLES:
+        raise ValueError(
+            f"signal too short to process "
+            f"({len(x)} samples, need at least {_MIN_REGION_SAMPLES})")
+
+    # Reconcile nperseg with what _stft will actually use, BEFORE calling
+    # it, rather than after: _stft silently shrinks nperseg to len(x)
+    # internally when the signal is shorter than the requested window
+    # (matches scipy's own behaviour - see the "STFT (numpy)" section
+    # above _stft/_istft, which are deliberately NOT changed here to
+    # preserve that). _istft doesn't re-derive nperseg from Zxx's own
+    # shape, it trusts whatever it's given - so forward and inverse
+    # transform must be handed the SAME value, or they end up disagreeing
+    # about a number that was never actually lost. Doing the
+    # reconciliation once, here, and using the result consistently for
+    # noverlap/hop_s/both STFT calls/both ISTFT calls/the diag report
+    # fixes that disagreement - and the same disagreement one step
+    # earlier ("noverlap must be less than nperseg"), since noverlap is
+    # now derived from the reconciled value too, and 3/4 of any positive
+    # nperseg is always less than that nperseg. For the common case
+    # (len(x) >= nperseg) this line changes nothing: nperseg is already
+    # unchanged, so every currently-working call is byte-for-byte
+    # unaffected.
+    nperseg = min(int(nperseg), len(x))
     noverlap = nperseg * 3 // 4
     f, _, ZL = _stft(x[:, 0], sr, nperseg=nperseg, noverlap=noverlap)
     _, _, ZR = _stft(x[:, 1], sr, nperseg=nperseg, noverlap=noverlap)
@@ -655,24 +697,38 @@ def recenter_bands(x, sr, strength, n_bands=24, nperseg=4096,
     onset = rise > 4.0                       # energy jumped > 4 dB per hop
     hop_s = (nperseg - noverlap) / sr
     n_att = max(1, int(round(0.06 / hop_s)))  # attack window ~60 ms
-    mask = np.zeros(n_frames)
-    for i in np.where(onset)[0]:
-        mask[i:i + n_att] = 1.0              # 1=attack, 0=tail
+    n_smooth = max(3, int(round(0.03 / hop_s)) | 1)   # odd, >=3, ~30ms smoothing span
 
-    # Smooth the hard 1/0 mask into a soft crossfade so the correction
-    # ramps between the attack angle and the tail angle over a few frames
-    # instead of switching abruptly (an abrupt switch rotates the image by
-    # a jump at every onset boundary - audible as a click/seam, especially
-    # at Attack=1 / Tail=0). A ~30 ms Hann kernel gives a gentle ramp.
-    # NOTE: np.hanning(n) is zero at both ends, so a real smoothing kernel
-    # needs its interior; np.hanning(3) = [0,1,0] is a no-op (this used to
-    # be the bug that left the mask hard).
-    n_smooth = max(3, int(round(0.03 / hop_s)) | 1)   # odd, >=3
-    k = np.hanning(n_smooth + 2)[1:-1]                 # drop the zero ends
-    if k.sum() <= EPS:
-        k = np.ones(1)
-    mask = np.convolve(mask, k / k.sum(), mode="same")
-    mask = np.clip(mask, 0.0, 1.0)
+    # collapsed: fewer STFT frames than the smoothing kernel needs (see
+    # the docstring). This used to be exactly what crashed:
+    # np.convolve(mask, kernel, mode="same") returns
+    # max(len(mask), len(kernel)) once the kernel outgrows the mask, not
+    # len(mask) - silently corrupting mask's length against w_all's a few
+    # lines below. Collapsing to a single measurement instead of clamping
+    # n_smooth down to fit is a deliberate choice, not just a crash
+    # workaround: a squeezed 3-frame crossfade would still produce a
+    # number, just not an honest one - there is no tail in a 20ms click.
+    collapsed = n_smooth > n_frames
+    if collapsed:
+        mask = np.ones(n_frames)             # treat the whole signal as attack
+    else:
+        mask = np.zeros(n_frames)
+        for i in np.where(onset)[0]:
+            mask[i:i + n_att] = 1.0          # 1=attack, 0=tail
+
+        # Smooth the hard 1/0 mask into a soft crossfade so the correction
+        # ramps between the attack angle and the tail angle over a few frames
+        # instead of switching abruptly (an abrupt switch rotates the image by
+        # a jump at every onset boundary - audible as a click/seam, especially
+        # at Attack=1 / Tail=0). A ~30 ms Hann kernel gives a gentle ramp.
+        # NOTE: np.hanning(n) is zero at both ends, so a real smoothing kernel
+        # needs its interior; np.hanning(3) = [0,1,0] is a no-op (this used to
+        # be the bug that left the mask hard).
+        k = np.hanning(n_smooth + 2)[1:-1]                 # drop the zero ends
+        if k.sum() <= EPS:
+            k = np.ones(1)
+        mask = np.convolve(mask, k / k.sum(), mode="same")
+        mask = np.clip(mask, 0.0, 1.0)
 
     # broadband reference angles (used to stabilize weak bands)
     ang_all, w_all = [], []
@@ -688,11 +744,18 @@ def recenter_bands(x, sr, strength, n_bands=24, nperseg=4096,
     w_all = np.concatenate(w_all)
     mask_rep = np.tile(mask, len(bands))
     a_att_bb = weighted_median(ang_all, w_all * mask_rep)
-    a_tail_bb = weighted_median(ang_all, w_all * (1.0 - mask_rep))
+    # collapsed: no frames are weighted toward "tail" (mask is all-1), so
+    # weighted_median would fall through to its own zero-weight default
+    # (45.0, i.e. "centre") - that's a fabricated measurement, not an
+    # honest "no tail here". Mirror the attack angle explicitly instead;
+    # tail_deg == attack_deg is what format_diag/the console print use to
+    # detect "collapsed" and say so, rather than claiming a tail reading.
+    a_tail_bb = a_att_bb if collapsed else weighted_median(ang_all, w_all * (1.0 - mask_rep))
     w_ref = 0.15 * np.sum(w_all) / max(len(bands), 1)
 
     if verbose:
-        print(f"broadband: attack {a_att_bb:.1f}d  tail {a_tail_bb:.1f}d")
+        collapsed_note = "  (collapsed: too short for a separate tail)" if collapsed else ""
+        print(f"broadband: attack {a_att_bb:.1f}d  tail {a_tail_bb:.1f}d{collapsed_note}")
         print(f"{'band':>4}  {'freq range':>16}  {'attack':>7}  {'tail':>7}")
     att_vals = []
     for bi, idx in enumerate(bands):
@@ -705,15 +768,20 @@ def recenter_bands(x, sr, strength, n_bands=24, nperseg=4096,
         ang = np.degrees(np.arctan2(np.sqrt(er), np.sqrt(el)))
         w = e * coh ** 2
 
-        wa, wt = np.sum(w * mask), np.sum(w * (1.0 - mask))
+        wa = np.sum(w * mask)
         a_att = weighted_median(ang, w * mask)
-        a_tail = weighted_median(ang, w * (1.0 - mask))
         # confidence shrinkage: weak bands lean on the broadband estimate
         la = wa / (wa + w_ref)
-        lt = wt / (wt + w_ref)
         a_att = la * a_att + (1.0 - la) * a_att_bb
-        a_tail = lt * a_tail + (1.0 - lt) * a_tail_bb
         att_vals.append(a_att)
+
+        if collapsed:
+            a_tail = a_att   # see a_tail_bb above: mirror, don't fabricate
+        else:
+            wt = np.sum(w * (1.0 - mask))
+            a_tail = weighted_median(ang, w * (1.0 - mask))
+            lt = wt / (wt + w_ref)
+            a_tail = lt * a_tail + (1.0 - lt) * a_tail_bb
 
         c_att = np.clip(strength * (45.0 - a_att), -max_corr_deg, max_corr_deg)
         c_tail = np.clip(tail_strength * (45.0 - a_tail),
@@ -829,9 +897,18 @@ def process_one(in_path, out_path, args, verbose, start=None, length=None):
                                  nperseg=win,
                                  tail_strength=args.tail_strength, verbose=v)
         if v:
-            print(f"measured: offset {diag['offset_deg']:+.2f}d "
-                  f"(attack {diag['attack_deg']:.2f}d / tail {diag['tail_deg']:.2f}d), "
-                  f"per-band spread {diag['spread_deg']:.2f}d, window {diag['win']}")
+            # tail_deg == attack_deg means recenter_bands collapsed the
+            # attack/tail split (signal too short to have a separate
+            # tail) - say that plainly rather than printing a tail angle
+            # that was never actually measured.
+            if diag["tail_deg"] == diag["attack_deg"]:
+                print(f"measured: offset {diag['offset_deg']:+.2f}d "
+                      f"(single angle - too short for a separate attack/tail split), "
+                      f"per-band spread {diag['spread_deg']:.2f}d, window {diag['win']}")
+            else:
+                print(f"measured: offset {diag['offset_deg']:+.2f}d "
+                      f"(attack {diag['attack_deg']:.2f}d / tail {diag['tail_deg']:.2f}d), "
+                      f"per-band spread {diag['spread_deg']:.2f}d, window {diag['win']}")
     else:
         y, diag = x, None
         if v:
