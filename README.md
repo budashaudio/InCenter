@@ -1,10 +1,82 @@
 # InCenter
 
-A free, in-REAPER stereo re-centering tool for foley and field recordings
-that came off a portable recorder with the stereo image pulled to one
-side. It runs entirely inside your own REAPER session.
+A free tool that re-centers a stereo image that's pulled to one side. It
+runs entirely inside your own REAPER session.
 
 *by Budash Audio · v0.9.0 · MIT-licensed*
+
+<!-- TODO: demo clip goes here - a short goniometer A/B showing the
+     stereo image off-axis, then centred at the same width. -->
+
+## Why rotation, not narrowing
+
+The common fixes for an off-axis stereo image — mid/side width reduction,
+mono-summing — work by narrowing the stereo base until the offset is
+less noticeable. That costs you real width.
+
+InCenter instead measures the actual angle of the offset, per frequency
+band, and rotates it back to center. The stereo base keeps whatever
+width it had; only its orientation changes.
+
+## Who it's for
+
+**Portable-recorder captures.** Field and foley recordings off an H1,
+H4, H5 or similar handheld, X/Y or A/B, where the recorder wasn't quite
+square to the source and the image came back pulled to one side.
+
+**Designed stereo assets.** Whooshes, blips, textures and other
+synthesized sound designed without ever watching the stereo base on a
+goniometer — the image can drift off-center in the design process just
+as easily as from a badly-aimed mic, and needs the same fix.
+
+## Install
+
+1. Copy the whole folder into your REAPER `Scripts` folder (any
+   subfolder is fine — each script locates itself and its siblings
+   automatically, no fixed path is baked in). A ReaPack index isn't
+   published yet, so this manual copy is the only install path for now.
+2. In REAPER: Actions -> Show action list -> New action -> Load ReaScript...
+   and pick `BudashAudio_InCenter.lua` — the control panel, and the only
+   file here you load directly.
+3. Requires the **ReaImGui** extension (Extensions -> ReaPack -> Browse
+   packages -> search "ReaImGui").
+4. Requires a system **Python 3** with `numpy`. If you don't already have
+   it, follow **[INSTALL_Python.md](INSTALL_Python.md)** — a plain,
+   step-by-step guide (no Python knowledge needed) for macOS, Windows and
+   Linux. InCenter then auto-detects the interpreter — it actually tries
+   `import numpy` in each candidate, so it won't pick a Python that's
+   missing the library.
+
+**Do not load `incenter.py` or `incenter_core.lua` as REAPER actions.**
+They're dependencies, not standalone scripts: `incenter_core.lua` is the
+REAPER-side mechanics the panel calls into (process runner, source-swap,
+Python finder), and `incenter.py` is the DSP engine, meant to run only
+as a subprocess with CLI arguments. Loading `incenter.py` directly runs
+it under REAPER's own embedded Python, which can't import numpy and may
+hang REAPER. Both carry an `@noindex` tag so ReaPack will not list them,
+once its index exists.
+
+## Use
+
+<!-- TODO: panel screenshot goes here (incenter_ui_screenshot.png or
+     similar - not yet in the repo). -->
+
+Select one or more stereo WAV items, open the InCenter panel, and set:
+
+- **Attack / Tail strength** — how hard to pull each part back to center
+  (0-1). Tail 0 leaves the room/reverb tail where it is.
+- **Sound length** — leave on **Auto** to let it pick the analysis window
+  from the detected sound length, or force a size for unusual material.
+- **Align** — on for spaced mics (AB); off for coincident mics (XY/MS),
+  which have no timing offset to fix.
+- **Stereo width** — optional, narrows the image after centering.
+- **Width only (skip centering)** — applies stereo width reduction
+  without re-centering, for when you only want the narrowing.
+
+Press **Process selected item(s)**. Each item's take is repointed at a
+corrected file named `<name>_centered_<HHMMSS>.wav`, written to the
+project's media folder (or next to the source if the project isn't saved).
+The original source audio is never overwritten.
 
 ## What it does
 
@@ -26,58 +98,50 @@ side. It runs entirely inside your own REAPER session.
   iXML and other chunks are carried across so the corrected file drops
   back onto the timeline exactly where the original sat.
 
-## Files
+## What InCenter does not do
 
-Everything installs together as one package:
+- It corrects a **static offset of the whole stereo scene**. It measures
+  one angle per frequency band across the file and rotates each band back.
+- It does **not** separate sources. It cannot tell a footstep from the
+  street behind it, and it cannot move one and leave the other.
+- On material where sources move across the stereo base, or where the
+  scene is already symmetric, the measured offset will be near zero and
+  **no correction is applied — this is the correct result, not a
+  failure**. The status line after processing reports the measurement so
+  you can see this for yourself.
+- Movement of a source across the image is content, not a defect.
 
-- `BudashAudio_InCenter.lua` — the control panel (sliders). **This is the
-  one to load.**
-- `incenter_core.lua` — the REAPER-side mechanics the panel calls into
-  (process runner, source-swap, Python finder). Not an action; don't
-  load it directly.
-- `incenter.py` — the DSP engine. Not an action; runs as a subprocess.
-  Don't load it directly (see the warning below).
+## Known limitations
 
-## Install
+- **Metadata:** standard chunks (bext, iXML, cue, LIST, junk) are carried
+  over; exotic vendor chunks should survive too, but only the common ones
+  are tested.
+- **Bit depth:** 16/24-bit int and 32/64-bit float are supported. A 24-bit
+  source that can't be decoded cleanly falls back to 32-bit float output.
+- **SECTION takes** (reversed or glued items) are skipped with a message —
+  glue to a plain file first if you need to process one.
+- **Item region:** processing is scoped to the item's trimmed region — an
+  item covering the whole source file behaves as before, and a trimmed
+  item is measured and corrected using only its own content.
+- **Windows:** the macOS and Linux paths are the tested ones. Windows
+  support is implemented but **experimental** — please report back if you
+  run it there.
 
-1. Install via ReaPack, or copy the whole folder anywhere inside your
-   REAPER `Scripts` folder. Subfolders are fine — each script locates
-   itself and its siblings automatically, no fixed path is baked in.
-2. In REAPER: Actions -> Show action list -> New action -> Load ReaScript...
-   and pick `BudashAudio_InCenter.lua`.
-3. Requires the **ReaImGui** extension (Extensions -> ReaPack -> Browse
-   packages -> search "ReaImGui").
-4. Requires a system **Python 3** with `numpy`. If you don't already have
-   it, follow **[INSTALL_Python.md](INSTALL_Python.md)** — a plain,
-   step-by-step guide (no Python knowledge needed) for macOS, Windows and
-   Linux. InCenter then auto-detects the interpreter — it actually tries
-   `import numpy` in each candidate, so it won't pick a Python that's
-   missing the library.
+## Troubleshooting
 
-**Do not load `incenter.py` or `incenter_core.lua` as REAPER actions.**
-They're dependencies, not standalone scripts. `incenter.py` only runs
-correctly as a subprocess with CLI arguments; loading it directly runs it
-under REAPER's own embedded Python, which can't import numpy and may
-hang REAPER. Both carry an `@noindex` tag so ReaPack won't list them.
-
-## Use
-
-Select one or more stereo WAV items, open the InCenter panel, and set:
-
-- **Attack / Tail strength** — how hard to pull each part back to center
-  (0-1). Tail 0 leaves the room/reverb tail where it is.
-- **Sound length** — leave on **Auto** to let it pick the analysis window
-  from the detected sound length, or force a size for unusual material.
-- **Align** — on for spaced mics (AB); off for coincident mics (XY/MS),
-  which have no timing offset to fix.
-- **Stereo width** — optional, narrows the image after centering.
-- **Width only (skip centering)** — applies stereo width reduction
-  without re-centering, for when you only want the narrowing.
-
-Press **Process selected item(s)**. Each item's take is repointed at a
-corrected file named `<name>_centered_<HHMMSS>.wav`, written to the
-project's media folder (or next to the source if the project isn't saved).
-The original source audio is never overwritten.
+- **Nothing happens / REAPER seems frozen:** first check you loaded
+  `BudashAudio_InCenter.lua`, **not** `incenter.py` (the most common
+  mistake).
+- **"No Python 3 found":** if you don't have a Python 3 with numpy
+  anywhere yet, install one — see [INSTALL_Python.md](INSTALL_Python.md).
+  If you already do (a pyenv, conda, or other custom-prefix install) but
+  InCenter still isn't finding it, that's because auto-detection only
+  checks the usual install locations — set `PYTHON_OVERRIDE` near the
+  top of `BudashAudio_InCenter.lua` to its full path instead.
+- **The panel freezes while processing:** expected — `ExecProcess` blocks
+  the main thread until the worker exits. Batching every selected item
+  into one process launch keeps it as short as possible, but it isn't
+  instant on long files.
 
 ## Why it's built the way it is
 
@@ -109,51 +173,6 @@ A few non-obvious decisions, in case you're reading the source:
   panel.** The process runner, the source-swap, and the Python finder are
   REAPER plumbing, not UI code — that separation is worth keeping on its
   own merits, independent of how many scripts call into it.
-
-## Known limitations
-
-- **Metadata:** standard chunks (bext, iXML, cue, LIST, junk) are carried
-  over; exotic vendor chunks should survive too, but only the common ones
-  are tested.
-- **Bit depth:** 16/24-bit int and 32/64-bit float are supported. A 24-bit
-  source that can't be decoded cleanly falls back to 32-bit float output.
-- **SECTION takes** (reversed or glued items) are skipped with a message —
-  glue to a plain file first if you need to process one.
-- **Item region:** processing is scoped to the item's trimmed region — an
-  item covering the whole source file behaves as before, and a trimmed
-  item is measured and corrected using only its own content.
-- **Windows:** the macOS and Linux paths are the tested ones. Windows
-  support is implemented but **experimental** — please report back if you
-  run it there.
-
-### What InCenter does not do
-
-- It corrects a **static offset of the whole stereo scene**. It measures
-  one angle per frequency band across the file and rotates each band back.
-- It does **not** separate sources. It cannot tell a footstep from the
-  street behind it, and it cannot move one and leave the other.
-- On material where sources move across the stereo base, or where the
-  scene is already symmetric, the measured offset will be near zero and
-  **no correction is applied — this is the correct result, not a
-  failure**. The status line after processing reports the measurement so
-  you can see this for yourself.
-- Movement of a source across the image is content, not a defect.
-
-## Troubleshooting
-
-- **Nothing happens / REAPER seems frozen:** first check you loaded
-  `BudashAudio_InCenter.lua`, **not** `incenter.py` (the most common
-  mistake).
-- **"No Python 3 found":** if you don't have a Python 3 with numpy
-  anywhere yet, install one — see [INSTALL_Python.md](INSTALL_Python.md).
-  If you already do (a pyenv, conda, or other custom-prefix install) but
-  InCenter still isn't finding it, that's because auto-detection only
-  checks the usual install locations — set `PYTHON_OVERRIDE` near the
-  top of `BudashAudio_InCenter.lua` to its full path instead.
-- **The panel freezes while processing:** expected — `ExecProcess` blocks
-  the main thread until the worker exits. Batching every selected item
-  into one process launch keeps it as short as possible, but it isn't
-  instant on long files.
 
 ## Running the tests
 
