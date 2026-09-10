@@ -3,7 +3,7 @@
 A free tool that re-centers a stereo image that's pulled to one side. It
 runs entirely inside your own REAPER session.
 
-*by Budash Audio · v0.9.0 · MIT-licensed*
+*by [Budash Audio](https://budashaudio.com) · v0.9.0 · MIT-licensed*
 
 ![Goniometer A/B comparison: a stereo image pulled off-axis to one side, then rotated back to center by InCenter with its stereo width unchanged](docs/inCenter_promo_gif.gif)
 
@@ -29,6 +29,9 @@ goniometer — the image can drift off-center in the design process just
 as easily as from a badly-aimed mic, and needs the same fix.
 
 ## Install
+
+Download the latest release from the
+[GitHub Releases page](https://github.com/budashaudio/InCenter/releases), then:
 
 1. Copy the whole folder into your REAPER `Scripts` folder (any
    subfolder is fine — each script locates itself and its siblings
@@ -88,7 +91,8 @@ The original source audio is never overwritten.
 - Optional **inter-channel delay alignment** (GCC-PHAT, sub-sample
   precision) for spaced-mic (AB) recordings where part of the "wrong"
   image is really a timing offset, not a level one. The delay is measured
-  on the loudest part of the file, so leading silence doesn't fool it.
+  on the loudest part of the region being processed, so leading silence
+  doesn't fool it.
 - Optional **stereo width reduction**, applied last and independently of
   centering, with RMS-matched output level.
 - **Keeps your format and metadata.** Output bit depth and sample rate
@@ -114,13 +118,20 @@ The original source audio is never overwritten.
 - **Metadata:** standard chunks (bext, iXML, cue, LIST, junk) are carried
   over; exotic vendor chunks should survive too, but only the common ones
   are tested.
-- **Bit depth:** 16/24-bit int and 32/64-bit float are supported. A 24-bit
-  source that can't be decoded cleanly falls back to 32-bit float output.
+- **Bit depth:** 16/24/32-bit int and 32/64-bit float are supported. A
+  24-bit source that can't be decoded cleanly falls back to 32-bit float
+  output.
 - **SECTION takes** (reversed or glued items) are skipped with a message —
   glue to a plain file first if you need to process one.
 - **Item region:** processing is scoped to the item's trimmed region — an
   item covering the whole source file behaves as before, and a trimmed
   item is measured and corrected using only its own content.
+- **Very short items:** items under ~21ms at 48kHz (1024 samples) are
+  refused with a clear message rather than processed. Items only
+  marginally longer than that floor collapse to a single measured angle
+  instead of a separate attack/tail split — there aren't enough STFT
+  frames yet for the crossfade to mean anything — with normal
+  attack/tail splitting resuming from roughly 22ms at 48kHz.
 - **Windows:** the macOS and Linux paths are the tested ones. Windows
   support is implemented but **experimental** — please report back if you
   run it there.
