@@ -9,13 +9,13 @@ runs entirely inside your own REAPER session.
 
 ## Why rotation, not narrowing
 
-The common fixes for an off-axis stereo image — mid/side width reduction,
-mono-summing — work by narrowing the stereo base until the offset is
+The common fixes for an off-axis stereo image (mid/side width reduction,
+mono-summing) work by narrowing the stereo base until the offset is
 less noticeable. That costs you real width.
 
 InCenter instead measures the actual angle of the offset, per frequency
 band, and rotates it back to center. The stereo base keeps whatever
-width it had; only its orientation changes.
+width it had. Only its orientation changes.
 
 ## Who it's for
 
@@ -25,7 +25,7 @@ square to the source and the image came back pulled to one side.
 
 **Designed stereo assets.** Whooshes, blips, textures and other
 synthesized sound designed without ever watching the stereo base on a
-goniometer — the image can drift off-center in the design process just
+goniometer: the image can drift off-center in the design process just
 as easily as from a badly-aimed mic, and needs the same fix.
 
 ## Install
@@ -34,23 +34,23 @@ Download the latest release from the
 [GitHub Releases page](https://github.com/budashaudio/InCenter/releases), then:
 
 1. Copy the whole folder into your REAPER `Scripts` folder (any
-   subfolder is fine — each script locates itself and its siblings
+   subfolder is fine: each script locates itself and its siblings
    automatically, no fixed path is baked in). A ReaPack index isn't
    published yet, so this manual copy is the only install path for now.
 2. In REAPER: Actions -> Show action list -> New action -> Load ReaScript...
-   and pick `BudashAudio_InCenter.lua` — the control panel, and the only
-   file here you load directly.
+   and pick `BudashAudio_InCenter.lua` (the control panel, and the only
+   file here you load directly).
 3. Requires the **ReaImGui** extension (Extensions -> ReaPack -> Browse
    packages -> search "ReaImGui").
 4. Requires a system **Python 3** with `numpy`. If you don't already have
-   it, follow **[INSTALL_Python.md](INSTALL_Python.md)** — a plain,
+   it, follow **[INSTALL_Python.md](INSTALL_Python.md)**, a plain,
    step-by-step guide (no Python knowledge needed) for macOS, Windows and
-   Linux. InCenter then auto-detects the interpreter — it actually tries
+   Linux. InCenter then auto-detects the interpreter. It actually tries
    `import numpy` in each candidate, so it won't pick a Python that's
    missing the library.
 
 **Do not load `incenter.py` or `incenter_core.lua` as REAPER actions.**
-They're dependencies, not standalone scripts: `incenter_core.lua` is the
+They're dependencies: `incenter_core.lua` is the
 REAPER-side mechanics the panel calls into (process runner, source-swap,
 Python finder), and `incenter.py` is the DSP engine, meant to run only
 as a subprocess with CLI arguments. Loading `incenter.py` directly runs
@@ -64,14 +64,14 @@ once its index exists.
 
 Select one or more stereo WAV items, open the InCenter panel, and set:
 
-- **Attack / Tail strength** — how hard to pull each part back to center
+- **Attack / Tail strength**: how hard to pull each part back to center
   (0-1). Tail 0 leaves the room/reverb tail where it is.
-- **Sound length** — leave on **Auto** to let it pick the analysis window
+- **Sound length**: leave on **Auto** to let it pick the analysis window
   from the detected sound length, or force a size for unusual material.
-- **Align** — on for spaced mics (AB); off for coincident mics (XY/MS),
+- **Align**: on for spaced mics (AB); off for coincident mics (XY/MS),
   which have no timing offset to fix.
-- **Stereo width** — optional, narrows the image after centering.
-- **Width only (skip centering)** — applies stereo width reduction
+- **Stereo width**: optional, narrows the image after centering.
+- **Width only (skip centering)**: applies stereo width reduction
   without re-centering, for when you only want the narrowing.
 
 Press **Process selected item(s)**. Each item's take is repointed at a
@@ -82,17 +82,17 @@ The original source audio is never overwritten.
 ## What it does
 
 - Estimates the stereo angle **per frequency band** (24 log-spaced bands)
-  and rotates each band back to center — fixes the frequency-dependent
+  and rotates each band back to center. That fixes the frequency-dependent
   tilt a plain L/R gain trim can't touch.
 - Estimates it **separately for the attack and the tail** of each sound
   (onset detection on the energy envelope) and crossfades between the two
   corrections, since a foley hit's transient and its room tail often sit
   at different angles.
 - Optional **inter-channel delay alignment** (GCC-PHAT, sub-sample
-  precision) for spaced-mic (AB) recordings where part of the "wrong"
-  image is really a timing offset, not a level one. The delay is measured
-  on the loudest part of the region being processed, so leading silence
-  doesn't fool it.
+  precision) for spaced-mic (AB) recordings, where part of the "wrong"
+  image comes from a small timing offset between channels. The delay is
+  measured on the loudest part of the region being processed, so leading
+  silence doesn't fool it.
 - Optional **stereo width reduction**, applied last and independently of
   centering, with RMS-matched output level.
 - **Keeps your format and metadata.** Output bit depth and sample rate
@@ -108,10 +108,11 @@ The original source audio is never overwritten.
   street behind it, and it cannot move one and leave the other.
 - On material where sources move across the stereo base, or where the
   scene is already symmetric, the measured offset will be near zero and
-  **no correction is applied — this is the correct result, not a
-  failure**. The status line after processing reports the measurement so
-  you can see this for yourself.
-- Movement of a source across the image is content, not a defect.
+  **no correction is applied: this is the correct result**. The status
+  line after processing reports the measurement so you can see this for
+  yourself.
+- A source moving across the image is part of the recording, and
+  InCenter leaves it alone.
 
 ## Known limitations
 
@@ -121,19 +122,19 @@ The original source audio is never overwritten.
 - **Bit depth:** 16/24/32-bit int and 32/64-bit float are supported. A
   24-bit source that can't be decoded cleanly falls back to 32-bit float
   output.
-- **SECTION takes** (reversed or glued items) are skipped with a message —
-  glue to a plain file first if you need to process one.
-- **Item region:** processing is scoped to the item's trimmed region — an
+- **SECTION takes** (reversed or glued items) are skipped with a message.
+  Glue to a plain file first if you need to process one.
+- **Item region:** processing is scoped to the item's trimmed region: an
   item covering the whole source file behaves as before, and a trimmed
   item is measured and corrected using only its own content.
-- **Very short items:** items under ~21ms at 48kHz (1024 samples) are
-  refused with a clear message rather than processed. Items only
-  marginally longer than that floor collapse to a single measured angle
-  instead of a separate attack/tail split — there aren't enough STFT
-  frames yet for the crossfade to mean anything — with normal
-  attack/tail splitting resuming from roughly 22ms at 48kHz.
+- **Very short items:** items under about 21ms at 48kHz (1024 samples)
+  are refused with a clear error message. Items only marginally longer
+  than that floor still collapse to a single measured angle, since there
+  aren't enough STFT frames for the attack/tail crossfade to mean
+  anything. Normal attack/tail splitting resumes from roughly 22ms at
+  48kHz.
 - **Windows:** the macOS and Linux paths are the tested ones. Windows
-  support is implemented but **experimental** — please report back if you
+  support is implemented but **experimental**: please report back if you
   run it there.
 
 ## Troubleshooting
@@ -142,13 +143,13 @@ The original source audio is never overwritten.
   `BudashAudio_InCenter.lua`, **not** `incenter.py` (the most common
   mistake).
 - **"No Python 3 found":** if you don't have a Python 3 with numpy
-  anywhere yet, install one — see [INSTALL_Python.md](INSTALL_Python.md).
+  anywhere yet, install one: see [INSTALL_Python.md](INSTALL_Python.md).
   If you already do (a pyenv, conda, or other custom-prefix install) but
   InCenter still isn't finding it, that's because auto-detection only
-  checks the usual install locations — set `PYTHON_OVERRIDE` near the
+  checks the usual install locations. Set `PYTHON_OVERRIDE` near the
   top of `BudashAudio_InCenter.lua` to its full path instead.
-- **The panel freezes while processing:** expected — `ExecProcess` blocks
-  the main thread until the worker exits. Batching every selected item
+- **The panel freezes while processing:** this is expected. `ExecProcess`
+  blocks the main thread until the worker exits. Batching every selected item
   into one process launch keeps it as short as possible, but it isn't
   instant on long files.
 
@@ -156,18 +157,18 @@ The original source audio is never overwritten.
 
 A few non-obvious decisions, in case you're reading the source:
 
-- **DSP runs in a subprocess, not in REAPER's embedded Python.** REAPER's
-  built-in Python can't safely import numpy (it deadlocks via
-  ctypes/libffi inside the embedded interpreter), so all processing shells
-  out to your system Python via `reaper.ExecProcess` with a small wrapper
-  script that captures the real exit code to a sidecar file.
-- **One `incenter.py` process per batch, not per file.** `ExecProcess`
+- **DSP runs in a subprocess.** REAPER's built-in Python can't safely
+  import numpy (it deadlocks via ctypes/libffi inside the embedded
+  interpreter), so all processing shells out to your system Python via
+  `reaper.ExecProcess` with a small wrapper script that captures the real
+  exit code to a sidecar file.
+- **One `incenter.py` process handles the whole batch.** `ExecProcess`
   blocks REAPER's UI thread until the worker exits, so N separate process
   launches would mean N back-to-back freezes instead of one - processing
   every unique source in a single `--batch` run keeps that down to one
   blocking call (and lets the panel wrap the whole run in a single Undo
-  block). That's normal, not a hang; the panel shows "Processing..."
-  first so you can see it started.
+  block). That's expected: the panel shows "Processing..." first so you
+  can see it started.
 - **Own WAV reader/writer instead of a library one.** scipy.io.wavfile
   (back when scipy was still a dependency) can't write 24-bit and drops
   metadata chunks; parsing the RIFF container directly lets input format
@@ -177,11 +178,11 @@ A few non-obvious decisions, in case you're reading the source:
   `SetActiveTake`. Leaving it alone leaks a little memory per run, which
   is the better trade.
 - **Peaks are rebuilt with the 3-phase `PCM_Source_BuildPeaks` protocol**
-  after every source swap — without it the waveform doesn't redraw.
-- **REAPER-side mechanics live in `incenter_core.lua`, not inline in the
-  panel.** The process runner, the source-swap, and the Python finder are
-  REAPER plumbing, not UI code — that separation is worth keeping on its
-  own merits, independent of how many scripts call into it.
+  after every source swap. Without it the waveform doesn't redraw.
+- **REAPER-side mechanics live in `incenter_core.lua`.** The process
+  runner, the source-swap, and the Python finder are REAPER plumbing.
+  That separation is worth keeping on its own merits, independent of
+  how many scripts call into it.
 
 ## Running the tests
 
@@ -203,14 +204,14 @@ busted tests/lua --lpath="tests/lua/?.lua"
 ## Requirements
 
 - REAPER (developed on the portable macOS build, Apple Silicon)
-- ReaImGui — for the control panel only
+- ReaImGui: for the control panel only
 - Python 3 with `numpy`
 - Stereo WAV sources (24-bit/48 kHz is the primary target; other stereo
   WAVs work too)
 
 ## Changelog
 
-- **0.9.0** — First public release. Per-band attack/tail centering,
+- **0.9.0**: First public release. Per-band attack/tail centering,
   GCC-PHAT alignment on the loudest region, auto window selection, and
   item-region processing (a trimmed item is measured and corrected using
   only its own region of the source file, so a long recording with
@@ -223,13 +224,13 @@ busted tests/lua --lpath="tests/lua/?.lua"
 
 ## Credits & reporting
 
-Built by Budash Audio. Bug reports and feedback are welcome — please
+Built by Budash Audio. Bug reports and feedback are welcome. Please
 include your OS, REAPER version, and the text from the panel's status
 line if it showed an error.
 
 ## License
 
-MIT — see [LICENSE](LICENSE). Copyright (c) 2026 Budash Audio.
+MIT. See [LICENSE](LICENSE). Copyright (c) 2026 Budash Audio.
 
 Product and company names mentioned may be trademarks of their respective
-owners; InCenter is not affiliated with or endorsed by any of them.
+owners. InCenter is not affiliated with or endorsed by any of them.

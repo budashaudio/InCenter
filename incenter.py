@@ -26,8 +26,9 @@ Alignment:
   --align   estimate and remove inter-channel delay before rotation
             (sub-sample precision; crucial when the image stays off-center
              no matter how much level correction you apply). The delay is
-             measured on the loudest region of the file, not the start, so
-             leading silence or handling noise doesn't throw it off.
+             measured on the loudest region of the item being processed,
+             not the start, so leading silence or handling noise doesn't
+             throw it off.
 
 Width:
   --collapse  reduce stereo width, applied LAST, after re-centering
@@ -390,10 +391,11 @@ def estimate_delay(x, sr, max_ms=2.0):
     """Inter-channel delay in samples (positive: L lags R). GCC-PHAT,
     sub-sample precision.
 
-    The delay is estimated on the loudest region of the file (see
-    loudest_region), not the start: for a static recorder position the L/R
-    offset doesn't drift over the file, and measuring on real signal avoids
-    locking onto whatever noise happens to sit in leading silence.
+    The delay is estimated on the loudest region of the signal being
+    processed (see loudest_region), not the start: for a static recorder
+    position the L/R offset doesn't drift over the signal, and measuring
+    on real signal avoids locking onto whatever noise happens to sit in
+    leading silence.
     """
     a, b = loudest_region(x, sr)
     L, R = x[a:b, 0], x[a:b, 1]
@@ -1047,7 +1049,7 @@ def main():
                          "infile/outfile")
     ap.add_argument("--align", action="store_true",
                     help="estimate and remove inter-channel time delay first "
-                         "(measured on the loudest region of the file)")
+                         "(measured on the loudest region being processed)")
     ap.add_argument("--strength", type=float, default=1.0,
                     help="attack correction amount, 0..1 (default: 1.0)")
     ap.add_argument("--tail-strength", type=float, default=None,
