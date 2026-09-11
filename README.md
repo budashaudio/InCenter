@@ -5,7 +5,7 @@ runs entirely inside your own REAPER session.
 
 *by [Budash Audio](https://budashaudio.com) · v0.9.0 · MIT-licensed*
 
-![Goniometer A/B comparison: a stereo image pulled off-axis to one side, then rotated back to center by InCenter with its stereo width unchanged](docs/inCenter_promo_gif.gif)
+<img src="docs/inCenter_promo_gif.gif" alt="Goniometer A/B comparison: a stereo image pulled off-axis to one side, then rotated back to center by InCenter with its stereo width unchanged">
 
 ## Why rotation, not narrowing
 

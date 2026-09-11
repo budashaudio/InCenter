@@ -1,5 +1,5 @@
 <?xml version="1.0" encoding="utf-8"?>
-<index version="1" name="Budash Audio" commit="3e6f729f9c862a838eac122e92a2d0521c8aca3b">
+<index version="1" name="InCenter" commit="3e6f729f9c862a838eac122e92a2d0521c8aca3b">
   <category name="Budash Audio">
     <reapack name="BudashAudio_InCenter.lua" type="script" desc="InCenter - stereo re-centering for foley/field recordings">
       <metadata>
@@ -32,7 +32,6 @@
 Budash Audio
 }}}
  \u183? v0.9.0 \u183? MIT-licensed}\par}
-{\pard \ql \f0 \sa180 \li0 \fi0 {\cf1 [image: docs/inCenter_promo_gif.gif]\cf0}\par}
 {\pard \ql \f0 \sa180 \li0 \fi0 \b \fs32 Why rotation, not narrowing\par}
 {\pard \ql \f0 \sa180 \li0 \fi0 The common fixes for an off-axis stereo image (mid/side width reduction, mono-summing) work by narrowing the stereo base until the offset is less noticeable. That costs you real width.\par}
 {\pard \ql \f0 \sa180 \li0 \fi0 InCenter instead measures the actual angle of the offset, per frequency band, and rotates it back to center. The stereo base keeps whatever width it had. Only its orientation changes.\par}
