@@ -30,24 +30,35 @@ as easily as from a badly-aimed mic, and needs the same fix.
 
 ## Install
 
-Download the latest release from the
-[GitHub Releases page](https://github.com/budashaudio/InCenter/releases), then:
+Requires the **ReaImGui** extension (Extensions -> ReaPack -> Browse
+packages -> search "ReaImGui") and a system **Python 3** with `numpy`.
+If you don't already have Python set up, follow
+**[INSTALL_Python.md](INSTALL_Python.md)** first, a plain, step-by-step
+guide (no Python knowledge needed) for macOS, Windows and Linux.
+InCenter auto-detects the interpreter: it actually tries `import numpy`
+in each candidate, so it won't pick a Python that's missing the library.
 
-1. Copy the whole folder into your REAPER `Scripts` folder (any
+**Via ReaPack** (recommended): Extensions -> ReaPack -> Import
+repositories..., paste this URL, then OK:
+
+```
+https://raw.githubusercontent.com/budashaudio/InCenter/main/index.xml
+```
+
+Then Extensions -> ReaPack -> Synchronize packages, find InCenter under
+the Budash Audio category, right-click it, Install, then Apply. ReaPack
+then handles updates automatically.
+
+**Manual install**, as a fallback:
+
+1. Download the latest release from the
+   [GitHub Releases page](https://github.com/budashaudio/InCenter/releases)
+   and copy the whole folder into your REAPER `Scripts` folder (any
    subfolder is fine: each script locates itself and its siblings
-   automatically, no fixed path is baked in). A ReaPack index isn't
-   published yet, so this manual copy is the only install path for now.
+   automatically, no fixed path is baked in).
 2. In REAPER: Actions -> Show action list -> New action -> Load ReaScript...
-   and pick `BudashAudio_InCenter.lua` (the control panel, and the only
-   file here you load directly).
-3. Requires the **ReaImGui** extension (Extensions -> ReaPack -> Browse
-   packages -> search "ReaImGui").
-4. Requires a system **Python 3** with `numpy`. If you don't already have
-   it, follow **[INSTALL_Python.md](INSTALL_Python.md)**, a plain,
-   step-by-step guide (no Python knowledge needed) for macOS, Windows and
-   Linux. InCenter then auto-detects the interpreter. It actually tries
-   `import numpy` in each candidate, so it won't pick a Python that's
-   missing the library.
+   and pick `BudashAudio_InCenter.lua`, inside the `Budash Audio` folder
+   (the control panel, and the only file here you load directly).
 
 **Do not load `incenter.py` or `incenter_core.lua` as REAPER actions.**
 They're dependencies: `incenter_core.lua` is the
@@ -55,8 +66,8 @@ REAPER-side mechanics the panel calls into (process runner, source-swap,
 Python finder), and `incenter.py` is the DSP engine, meant to run only
 as a subprocess with CLI arguments. Loading `incenter.py` directly runs
 it under REAPER's own embedded Python, which can't import numpy and may
-hang REAPER. Both carry an `@noindex` tag so ReaPack will not list them,
-once its index exists.
+hang REAPER. Both carry an `@noindex` tag so ReaPack won't list them as
+separate actions.
 
 ## Use
 

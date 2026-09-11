@@ -2,7 +2,7 @@
 -- it can be unit-tested outside REAPER itself.
 
 local CORE_PATH = (debug.getinfo(1, "S").source:match("^@(.*/)") or "./")
-  .. "../../incenter_core.lua"
+  .. "../../Budash Audio/incenter_core.lua"
 
 -- Builds a fresh fake reaper table. Each spec gets its own instance (and its
 -- own ExtState store) so tests can't leak state into one another.

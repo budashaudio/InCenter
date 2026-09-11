@@ -506,7 +506,7 @@ class TestBatchCliVerbose:
 
     def _run(self, manifest):
         script = os.path.join(os.path.dirname(os.path.abspath(__file__)),
-                              "..", "incenter.py")
+                              "..", "Budash Audio", "incenter.py")
         return subprocess.run(
             [sys.executable, script, "--batch", str(manifest)],
             capture_output=True, text=True,
@@ -592,7 +592,7 @@ class TestBatchStdoutSurvivesSigkill:
         manifest.write_text("\n".join(manifest_lines) + "\n")
 
         script = os.path.join(os.path.dirname(os.path.abspath(__file__)),
-                              "..", "incenter.py")
+                              "..", "Budash Audio", "incenter.py")
         log_path = tmp_path / "worker.log"
         with open(log_path, "wb") as logfile:
             proc = subprocess.Popen(
@@ -914,7 +914,7 @@ class TestNoScipyAtRuntime:
         reintroduced import even inside a function body.
         """
         script = os.path.join(os.path.dirname(os.path.abspath(__file__)),
-                              "..", "incenter.py")
+                              "..", "Budash Audio", "incenter.py")
         probe = (
             "import runpy, sys\n"
             "class _Blocker:\n"

@@ -4,14 +4,15 @@
 -- @provides
 --   incenter_core.lua
 --   incenter.py
+--   ../INSTALL_Python.md > INSTALL_Python.md
 -- @about
 --   # InCenter
 --   Free, in-REAPER stereo re-centering tool for foley/field recordings
 --   whose stereo image is pulled to one side. See README.md for details.
 --   Requires the bundled incenter_core.lua + incenter.py and a system
 --   Python 3 with numpy.
--- @link https://github.com/budashaudio/incenter
---
+-- @link https://github.com/budashaudio/InCenter
+
 -- BudashAudio_InCenter.lua - InCenter control panel  [v0.9.0]
 --
 -- SPDX-License-Identifier: MIT
