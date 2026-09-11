@@ -19,9 +19,9 @@ width it had. Only its orientation changes.
 
 ## Who it's for
 
-**Portable-recorder captures.** Field and foley recordings off an H1,
-H4, H5 or similar handheld, X/Y or A/B, where the recorder wasn't quite
-square to the source and the image came back pulled to one side.
+**Portable-recorder captures.** Field recordings off an H1, H4, H5 or
+similar handheld, X/Y or A/B, where the recorder wasn't quite square to
+the source and the image came back pulled to one side.
 
 **Designed stereo assets.** Whooshes, blips, textures and other
 synthesized sound designed without ever watching the stereo base on a
@@ -97,8 +97,8 @@ The original source audio is never overwritten.
   tilt a plain L/R gain trim can't touch.
 - Estimates it **separately for the attack and the tail** of each sound
   (onset detection on the energy envelope) and crossfades between the two
-  corrections, since a foley hit's transient and its room tail often sit
-  at different angles.
+  corrections, since a recording's transient and its room tail often
+  sit at different angles.
 - Optional **inter-channel delay alignment** (GCC-PHAT, sub-sample
   precision) for spaced-mic (AB) recordings, where part of the "wrong"
   image comes from a small timing offset between channels. The delay is

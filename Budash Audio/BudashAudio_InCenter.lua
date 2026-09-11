@@ -1,4 +1,4 @@
--- @description InCenter - stereo re-centering for foley/field recordings
+-- @description InCenter - stereo re-centering for field recordings and designed sound
 -- @version 0.9.0
 -- @author Budash Audio
 -- @provides
@@ -7,10 +7,12 @@
 --   ../INSTALL_Python.md > INSTALL_Python.md
 -- @about
 --   # InCenter
---   Free, in-REAPER stereo re-centering tool for foley/field recordings
---   whose stereo image is pulled to one side. See README.md for details.
---   Requires the bundled incenter_core.lua + incenter.py and a system
---   Python 3 with numpy.
+--   Free, in-REAPER stereo re-centering for material whose stereo image
+--   is pulled to one side - portable-recorder field captures, or
+--   designed stereo assets (whooshes, blips, textures) built without
+--   watching the stereo base. See README.md for details. Requires the
+--   bundled incenter_core.lua + incenter.py and a system Python 3 with
+--   numpy.
 -- @link https://github.com/budashaudio/InCenter
 
 -- BudashAudio_InCenter.lua - InCenter control panel  [v0.9.0]
@@ -84,7 +86,7 @@ local WIN_VALUES = { "auto", 512, 1024, 2048, 4096 }
 local WIN_LABELS_ZERO_SEP =
   "Auto (detect from clip)\0" ..
   "Very short (clicks, taps)\0" ..
-  "Short (foley hits)\0" ..
+  "Short (hits, impacts)\0" ..
   "Medium\0" ..
   "Long (sustained sounds)\0"
 

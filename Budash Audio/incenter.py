@@ -19,7 +19,7 @@ Fixes two things a plain rotation cannot:
   * inter-channel time offset (ITD)                    -> GCC-PHAT delay alignment
 
 Correction is estimated separately for the attack and the tail of each
-sound and crossfaded between the two, since a foley hit's transient and
+sound and crossfaded between the two, since a recording's transient and
 its room tail often sit at different angles.
 
 Alignment:
@@ -68,10 +68,11 @@ EPS = 1e-12
 #      primary source format. Doing it by hand lets input bit depth ==
 #      output bit depth (16->16, 24->24, float->float).
 #   2. scipy.io.wavfile silently drops every chunk except fmt/data, so BWF
-#      timecode (bext), iXML, cue markers, etc. are lost. For field/foley
-#      material that metadata is the difference between a file that drops
-#      back onto the timeline at the right place and one that doesn't. We
-#      keep every non-fmt/non-data chunk and write it back untouched.
+#      timecode (bext), iXML, cue markers, etc. are lost. For field
+#      recording material that metadata is the difference between a file
+#      that drops back onto the timeline at the right place and one that
+#      doesn't. We keep every non-fmt/non-data chunk and write it back
+#      untouched.
 
 
 class WavInfo:
@@ -364,7 +365,7 @@ def auto_win(x, sr, verbose=True):
     Thresholds are deliberately coarse - the window only needs to be in the
     right ballpark for the band analysis, not exact:
         < 0.15 s  -> 512   (clicks, taps)
-        < 0.6 s   -> 1024  (foley hits)
+        < 0.6 s   -> 1024  (hits, impacts)
         < 2.5 s   -> 2048  (medium)
         else      -> 4096  (sustained / atmospheres)
     """

@@ -1,7 +1,7 @@
 -- incenter_core.lua - shared core for InCenter  [v0.9.0]
 -- @noindex
 --
--- InCenter - stereo re-centering for foley/field recordings
+-- InCenter - stereo re-centering for field recordings and designed sound
 -- SPDX-License-Identifier: MIT
 -- Copyright (c) 2026 Budash Audio
 --
