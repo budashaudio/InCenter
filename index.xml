@@ -1,0 +1,24 @@
+<?xml version="1.0" encoding="utf-8"?>
+<index version="1" name="Budash Audio" commit="3e6f729f9c862a838eac122e92a2d0521c8aca3b">
+  <category name="Budash Audio">
+    <reapack name="BudashAudio_InCenter.lua" type="script" desc="InCenter - stereo re-centering for foley/field recordings">
+      <metadata>
+        <description><![CDATA[{\rtf1\ansi\deff0{\fonttbl{\f0 \fswiss Helvetica;}{\f1 Courier;}}
+{\colortbl;\red255\green0\blue0;\red0\green0\blue255;}
+\widowctrl\hyphauto
+
+{\pard \ql \f0 \sa180 \li0 \fi0 \b \fs36 InCenter\par}
+{\pard \ql \f0 \sa180 \li0 \fi0 Free, in-REAPER stereo re-centering tool for foley/field recordings whose stereo image is pulled to one side. See README.md for details. Requires the bundled incenter_core.lua + incenter.py and a system Python 3 with numpy.\par}
+}
+]]></description>
+        <link rel="website">https://github.com/budashaudio/InCenter</link>
+      </metadata>
+      <version name="0.9.0" author="Budash Audio" time="2026-09-11T07:12:06Z">
+        <source main="main">https://github.com/budashaudio/InCenter/raw/3e6f729f9c862a838eac122e92a2d0521c8aca3b/Budash%20Audio/BudashAudio_InCenter.lua</source>
+        <source file="incenter_core.lua">https://github.com/budashaudio/InCenter/raw/3e6f729f9c862a838eac122e92a2d0521c8aca3b/Budash%20Audio/incenter_core.lua</source>
+        <source file="incenter.py">https://github.com/budashaudio/InCenter/raw/3e6f729f9c862a838eac122e92a2d0521c8aca3b/Budash%20Audio/incenter.py</source>
+        <source file="INSTALL_Python.md">https://github.com/budashaudio/InCenter/raw/3e6f729f9c862a838eac122e92a2d0521c8aca3b/INSTALL_Python.md</source>
+      </version>
+    </reapack>
+  </category>
+</index>
