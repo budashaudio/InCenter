@@ -1,14 +1,14 @@
 <?xml version="1.0" encoding="utf-8"?>
-<index version="1" name="InCenter" commit="3e6f729f9c862a838eac122e92a2d0521c8aca3b">
+<index version="1" name="InCenter" commit="17ad20d501397bccb2b52e4b6245d1358097c970">
   <category name="Budash Audio">
-    <reapack name="BudashAudio_InCenter.lua" type="script" desc="InCenter - stereo re-centering for foley/field recordings">
+    <reapack name="BudashAudio_InCenter.lua" type="script" desc="InCenter - stereo re-centering for field recordings and designed sound">
       <metadata>
         <description><![CDATA[{\rtf1\ansi\deff0{\fonttbl{\f0 \fswiss Helvetica;}{\f1 Courier;}}
 {\colortbl;\red255\green0\blue0;\red0\green0\blue255;}
 \widowctrl\hyphauto
 
 {\pard \ql \f0 \sa180 \li0 \fi0 \b \fs36 InCenter\par}
-{\pard \ql \f0 \sa180 \li0 \fi0 Free, in-REAPER stereo re-centering tool for foley/field recordings whose stereo image is pulled to one side. See README.md for details. Requires the bundled incenter_core.lua + incenter.py and a system Python 3 with numpy.\par}
+{\pard \ql \f0 \sa180 \li0 \fi0 Free, in-REAPER stereo re-centering for material whose stereo image is pulled to one side - portable-recorder field captures, or designed stereo assets (whooshes, blips, textures) built without watching the stereo base. See README.md for details. Requires the bundled incenter_core.lua + incenter.py and a system Python 3 with numpy.\par}
 }
 ]]></description>
         <link rel="website">https://github.com/budashaudio/InCenter</link>
@@ -36,7 +36,7 @@ Budash Audio
 {\pard \ql \f0 \sa180 \li0 \fi0 The common fixes for an off-axis stereo image (mid/side width reduction, mono-summing) work by narrowing the stereo base until the offset is less noticeable. That costs you real width.\par}
 {\pard \ql \f0 \sa180 \li0 \fi0 InCenter instead measures the actual angle of the offset, per frequency band, and rotates it back to center. The stereo base keeps whatever width it had. Only its orientation changes.\par}
 {\pard \ql \f0 \sa180 \li0 \fi0 \b \fs32 Who it's for\par}
-{\pard \ql \f0 \sa180 \li0 \fi0 {\b Portable-recorder captures.} Field and foley recordings off an H1, H4, H5 or similar handheld, X/Y or A/B, where the recorder wasn't quite square to the source and the image came back pulled to one side.\par}
+{\pard \ql \f0 \sa180 \li0 \fi0 {\b Portable-recorder captures.} Field recordings off an H1, H4, H5 or similar handheld, X/Y or A/B, where the recorder wasn't quite square to the source and the image came back pulled to one side.\par}
 {\pard \ql \f0 \sa180 \li0 \fi0 {\b Designed stereo assets.} Whooshes, blips, textures and other synthesized sound designed without ever watching the stereo base on a goniometer: the image can drift off-center in the design process just as easily as from a badly-aimed mic, and needs the same fix.\par}
 {\pard \ql \f0 \sa180 \li0 \fi0 \b \fs32 Install\par}
 {\pard \ql \f0 \sa180 \li0 \fi0 Requires the {\b ReaImGui} extension (Extensions -> ReaPack -> Browse packages -> search "ReaImGui") and a system {\b Python 3} with {\f1 numpy}. If you don't already have Python set up, follow {\b {\field{\*\fldinst{HYPERLINK "INSTALL_Python.md"}}{\fldrslt{\ul
@@ -64,7 +64,7 @@ GitHub Releases page
 {\pard \ql \f0 \sa180 \li0 \fi0 Press {\b Process selected item(s)}. Each item's take is repointed at a corrected file named {\f1 <name>_centered_<HHMMSS>.wav}, written to the project's media folder (or next to the source if the project isn't saved). The original source audio is never overwritten.\par}
 {\pard \ql \f0 \sa180 \li0 \fi0 \b \fs32 What it does\par}
 {\pard \ql \f0 \sa0 \li360 \fi-360 \bullet \tx360\tab Estimates the stereo angle {\b per frequency band} (24 log-spaced bands) and rotates each band back to center. That fixes the frequency-dependent tilt a plain L/R gain trim can't touch.\par}
-{\pard \ql \f0 \sa0 \li360 \fi-360 \bullet \tx360\tab Estimates it {\b separately for the attack and the tail} of each sound (onset detection on the energy envelope) and crossfades between the two corrections, since a foley hit's transient and its room tail often sit at different angles.\par}
+{\pard \ql \f0 \sa0 \li360 \fi-360 \bullet \tx360\tab Estimates it {\b separately for the attack and the tail} of each sound (onset detection on the energy envelope) and crossfades between the two corrections, since a recording's transient and its room tail often sit at different angles.\par}
 {\pard \ql \f0 \sa0 \li360 \fi-360 \bullet \tx360\tab Optional {\b inter-channel delay alignment} (GCC-PHAT, sub-sample precision) for spaced-mic (AB) recordings, where part of the "wrong" image comes from a small timing offset between channels. The delay is measured on the loudest part of the region being processed, so leading silence doesn't fool it.\par}
 {\pard \ql \f0 \sa0 \li360 \fi-360 \bullet \tx360\tab Optional {\b stereo width reduction}, applied last and independently of centering, with RMS-matched output level.\par}
 {\pard \ql \f0 \sa0 \li360 \fi-360 \bullet \tx360\tab {\b Keeps your format and metadata.} Output bit depth and sample rate match the input (16->16, 24->24, float->float), and BWF/bext timecode, iXML and other chunks are carried across so the corrected file drops back onto the timeline exactly where the original sat.\sa180\par}
