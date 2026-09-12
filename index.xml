@@ -38,6 +38,12 @@ Budash Audio
 {\pard \ql \f0 \sa180 \li0 \fi0 \b \fs32 Who it's for\par}
 {\pard \ql \f0 \sa180 \li0 \fi0 {\b Portable-recorder captures.} Field recordings off an H1, H4, H5 or similar handheld, X/Y or A/B, where the recorder wasn't quite square to the source and the image came back pulled to one side.\par}
 {\pard \ql \f0 \sa180 \li0 \fi0 {\b Designed stereo assets.} Whooshes, blips, textures and other synthesized sound designed without ever watching the stereo base on a goniometer: the image can drift off-center in the design process just as easily as from a badly-aimed mic, and needs the same fix.\par}
+{\pard \ql \f0 \sa180 \li0 \fi0 \b \fs32 A note on file formats\par}
+{\pard \ql \f0 \sa180 \li0 \fi0 REAPER can play audio in almost any format - mp3, mp4, flac, aiff and so on - without you ever noticing the difference. InCenter is not REAPER: it reads WAV only. If an item's source is anything else, InCenter skips it, with a status line naming the format as the reason.\par}
+{\pard \ql \f0 \sa180 \li0 \fi0 Watch for this specifically in a REAPER video workflow, where the same .mp4 sits on both a video track and an audio track. REAPER plays that .mp4 fine either way, so the limitation isn't obvious until you hit it: to InCenter, the audio-track copy is still an unsupported .mp4. See {\field{\*\fldinst{HYPERLINK "#video-and-other-non-wav-sources"}}{\fldrslt{\ul
+Video and other non-WAV sources
+}}}
+ for the fix.\par}
 {\pard \ql \f0 \sa180 \li0 \fi0 \b \fs32 Install\par}
 {\pard \ql \f0 \sa180 \li0 \fi0 Requires the {\b ReaImGui} extension (Extensions -> ReaPack -> Browse packages -> search "ReaImGui") and a system {\b Python 3} with {\f1 numpy}. If you don't already have Python set up, follow {\b {\field{\*\fldinst{HYPERLINK "INSTALL_Python.md"}}{\fldrslt{\ul
 INSTALL_Python.md
@@ -80,6 +86,12 @@ GitHub Releases page
 {\pard \ql \f0 \sa0 \li360 \fi-360 \bullet \tx360\tab {\b Item region:} processing is scoped to the item's trimmed region: an item covering the whole source file behaves as before, and a trimmed item is measured and corrected using only its own content.\par}
 {\pard \ql \f0 \sa0 \li360 \fi-360 \bullet \tx360\tab {\b Very short items:} items under about 21ms at 48kHz (1024 samples) are refused with a clear error message. Items only marginally longer than that floor still collapse to a single measured angle, since there aren't enough STFT frames for the attack/tail crossfade to mean anything. Normal attack/tail splitting resumes from roughly 22ms at 48kHz.\par}
 {\pard \ql \f0 \sa0 \li360 \fi-360 \bullet \tx360\tab {\b Windows:} the macOS and Linux paths are the tested ones. Windows support is implemented but {\b experimental}: please report back if you run it there.\sa180\par}
+{\pard \ql \f0 \sa180 \li0 \fi0 \b \fs32 Video and other non-WAV sources\par}
+{\pard \ql \f0 \sa180 \li0 \fi0 An item whose source is .mp4, .mp3, .flac or .aiff is skipped. If you need InCenter to correct one, render it to WAV first:\par}
+{\pard \ql \f0 \sa0 \li360 \fi-360 1.\tx360\tab Select the audio-copy item, not the one carrying your picture.\par}
+{\pard \ql \f0 \sa0 \li360 \fi-360 2.\tx360\tab Run {\b Item: Glue items}. This decodes the source into a new WAV, trimmed to the item.\par}
+{\pard \ql \f0 \sa0 \li360 \fi-360 3.\tx360\tab Run InCenter on the glued item.\sa180\par}
+{\pard \ql \f0 \sa180 \li0 \fi0 InCenter replaces an item's source with the corrected WAV, so never run it on the item carrying your video: that item would lose its picture.\par}
 {\pard \ql \f0 \sa180 \li0 \fi0 \b \fs32 Troubleshooting\par}
 {\pard \ql \f0 \sa0 \li360 \fi-360 \bullet \tx360\tab {\b Nothing happens / REAPER seems frozen:} first check you loaded {\f1 BudashAudio_InCenter.lua}, {\b not} {\f1 incenter.py} (the most common mistake).\par}
 {\pard \ql \f0 \sa0 \li360 \fi-360 \bullet \tx360\tab {\b "No Python 3 found":} if you don't have a Python 3 with numpy anywhere yet, install one: see {\field{\*\fldinst{HYPERLINK "INSTALL_Python.md"}}{\fldrslt{\ul
