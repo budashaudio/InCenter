@@ -28,6 +28,20 @@ synthesized sound designed without ever watching the stereo base on a
 goniometer: the image can drift off-center in the design process just
 as easily as from a badly-aimed mic, and needs the same fix.
 
+## A note on file formats
+
+REAPER can play audio in almost any format - mp3, mp4, flac, aiff and
+so on - without you ever noticing the difference. InCenter is not
+REAPER: it reads WAV only. If an item's source is anything else,
+InCenter skips it, with a status line naming the format as the reason.
+
+Watch for this specifically in a REAPER video workflow, where the same
+.mp4 sits on both a video track and an audio track. REAPER plays that
+.mp4 fine either way, so the limitation isn't obvious until you hit
+it: to InCenter, the audio-track copy is still an unsupported .mp4. See
+[Video and other non-WAV sources](#video-and-other-non-wav-sources) for
+the fix.
+
 ## Install
 
 Requires the **ReaImGui** extension (Extensions -> ReaPack -> Browse
@@ -147,6 +161,19 @@ The original source audio is never overwritten.
 - **Windows:** the macOS and Linux paths are the tested ones. Windows
   support is implemented but **experimental**: please report back if you
   run it there.
+
+## Video and other non-WAV sources
+
+An item whose source is .mp4, .mp3, .flac or .aiff is skipped. If you
+need InCenter to correct one, render it to WAV first:
+
+1. Select the audio-copy item, not the one carrying your picture.
+2. Run **Item: Glue items**. This decodes the source into a new WAV,
+   trimmed to the item.
+3. Run InCenter on the glued item.
+
+InCenter replaces an item's source with the corrected WAV, so never run
+it on the item carrying your video: that item would lose its picture.
 
 ## Troubleshooting
 

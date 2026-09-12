@@ -555,12 +555,14 @@ describe("incenter_core", function()
       assert.equal("source file not readable", reason)
     end)
 
-    it("rejects a non-wav source file", function()
+    it("rejects a non-wav source file, naming the format as the cause", function()
       local tmp = os.tmpname() .. ".aif"
       local f = io.open(tmp, "w"); f:write("x"); f:close()
       local core = item_with({ src = { path = tmp } })
       local _, _, reason = core.validate_item({})
-      assert.equal("not a wav file", reason)
+      assert.equal(
+        "source is not WAV (mp3/mp4/etc.) - render to WAV first, see README",
+        reason)
       os.remove(tmp)
     end)
 

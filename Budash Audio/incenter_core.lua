@@ -448,7 +448,9 @@ function core.validate_item(item)
   if path == "" or not core.file_exists(path) then
     return nil, nil, "source file not readable"
   end
-  if not path:lower():match("%.wav$") then return nil, nil, "not a wav file" end
+  if not path:lower():match("%.wav$") then
+    return nil, nil, "source is not WAV (mp3/mp4/etc.) - render to WAV first, see README"
+  end
   if reaper.GetMediaSourceNumChannels(src) ~= 2 then return nil, nil, "not stereo" end
 
   return take, path, nil
