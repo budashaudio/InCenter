@@ -104,7 +104,7 @@ Select one or more stereo WAV items, open the InCenter panel, and set:
 - **Width only (skip centering)**: applies stereo width reduction
   without re-centering, for when you only want the narrowing.
 
-The panel shows which engine is active (**Engine: Python** or
+The panel shows which engine is active under the Align checkbox (**Engine: Python** or
 **Engine: built-in**). Press **Process selected item(s)**. Each item's take is repointed at a
 corrected file named `<name>_centered_<HHMMSS>.wav`, written to the
 project's media folder (or next to the source if the project isn't saved).

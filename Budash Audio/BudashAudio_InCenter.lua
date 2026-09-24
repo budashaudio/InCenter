@@ -380,16 +380,22 @@ end
 local function section_header(text) colored_text(text, COL_HEADER) end
 
 -- One informational line saying which engine is running - the first thing
--- to ask a user who reports a problem. Not a control.
+-- to ask a user who reports a problem. Not a control. Drawn under the Align
+-- checkbox, the one control that differs between engines.
 local function engine_label()
-  if engine == "python" then
-    return "Engine: Python" .. (selection.forced and " (forced)" or "")
-  end
-  return "Engine: built-in (slower, no Align)" .. (selection.forced and " (forced)" or "")
+  local name = engine == "python" and "Python" or "built-in"
+  return "Engine: " .. name .. (selection.forced and " (forced)" or "")
 end
 
 local function draw_footer()
   reaper.ImGui_Dummy(ctx, 0, 2)
+  -- Shown whenever the built-in engine is active, forced or not.
+  if engine == "eel" then
+    reaper.ImGui_PushStyleColor(ctx, reaper.ImGui_Col_Text(), COL_MUTED)
+    reaper.ImGui_TextWrapped(ctx, "Install Python + NumPy for faster " ..
+      "processing, Align, and original bit depth (see INSTALL_Python.md).")
+    reaper.ImGui_PopStyleColor(ctx)
+  end
   colored_text("Budash Audio  -  v" .. core.VERSION, COL_MUTED)
 end
 
@@ -472,12 +478,6 @@ local function loop()
       reaper.ImGui_EndPopup(ctx)
     end
 
-    colored_text(engine_label(), COL_MUTED)
-    if engine == "eel" and not selection.forced then
-      colored_text("No Python 3 with numpy found. Installing it makes " ..
-        "processing faster and enables Align (see INSTALL_Python.md).", COL_MUTED)
-    end
-
     reaper.ImGui_Spacing(ctx)
     section_header("ATTACK CORRECTION")
     changed, strength = reaper.ImGui_SliderDouble(ctx, "##attack", strength, 0.0, 1.0, "%.2f")
@@ -506,11 +506,13 @@ local function loop()
       reaper.ImGui_Checkbox(ctx, "Align (fixes a tiny left/right timing offset)", false)
       reaper.ImGui_EndDisabled(ctx)
       colored_text("Not available in the built-in engine.", COL_LABEL)
+      colored_text(engine_label(), COL_MUTED)
     else
       reaper.ImGui_PushStyleColor(ctx, reaper.ImGui_Col_Text(), COL_ITEM_TEXT)
       changed, align = reaper.ImGui_Checkbox(ctx, "Align (fixes a tiny left/right timing offset)", align)
       reaper.ImGui_PopStyleColor(ctx)
       if changed then save_settings() end
+      colored_text(engine_label(), COL_MUTED)
     end
 
     reaper.ImGui_Spacing(ctx)
