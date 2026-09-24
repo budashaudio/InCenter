@@ -295,7 +295,7 @@ python3 -m pytest tests/
 brew install lua luarocks   # macOS; use your platform's package manager
 luarocks install busted
 eval "$(luarocks path)"
-busted tests/lua --lpath="tests/lua/?.lua"
+busted
 ```
 
 ## Requirements

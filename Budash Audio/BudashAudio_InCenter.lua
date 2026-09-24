@@ -20,7 +20,7 @@
 --   InCenter falls back to a built-in engine (needs ReaImGui 0.8.5+). The
 --   built-in engine has no Align, always writes 32-bit float, and is
 --   slower (roughly 4x realtime). With Python installed nothing changes.
---   The panel shows which engine is active.
+--   Align is greyed out with a note when the built-in engine is running.
 -- @link https://github.com/budashaudio/InCenter
 
 -- BudashAudio_InCenter.lua - InCenter control panel  [v0.10.0]
