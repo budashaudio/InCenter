@@ -104,8 +104,7 @@ Select one or more stereo WAV items, open the InCenter panel, and set:
 - **Width only (skip centering)**: applies stereo width reduction
   without re-centering, for when you only want the narrowing.
 
-The panel shows which engine is active under the Align checkbox (**Engine: Python** or
-**Engine: built-in**). Press **Process selected item(s)**. Each item's take is repointed at a
+Press **Process selected item(s)**. Each item's take is repointed at a
 corrected file named `<name>_centered_<HHMMSS>.wav`, written to the
 project's media folder (or next to the source if the project isn't saved).
 The original source audio is never overwritten.
@@ -115,7 +114,10 @@ The original source audio is never overwritten.
 InCenter picks its engine by itself; there is nothing to choose. If it
 finds a Python 3 with `numpy`, it uses that, exactly as before. If not, it
 falls back to a built-in engine that runs inside REAPER and needs only
-ReaImGui 0.8.5 or newer. The panel says which one is running.
+ReaImGui 0.8.5 or newer. To tell which one is running, look at the Align
+checkbox: if it is greyed out with the note "Not available in the built-in
+engine. See README.", the built-in engine is active; if you can tick it,
+Python is.
 
 The built-in engine is a fallback, not a replacement. Differences from the
 Python engine:
@@ -134,6 +136,22 @@ Python engine:
 
 Results from the two engines are not byte-identical. They implement the
 same algorithm, and Align is the only intended difference in what they do.
+
+### Installing Python to get Align and speed
+
+If you'd like Align, faster processing and output at the source's original
+bit depth, install Python 3 and the NumPy library once; InCenter finds them
+by itself afterwards (restart the panel, no other setup):
+
+1. Install Python 3 from python.org (macOS/Windows) or your package
+   manager (Linux).
+2. Install NumPy: run `pip3 install numpy` (Windows: `py -m pip install
+   numpy`).
+3. Close and reopen the InCenter panel. Align is now available.
+
+The full walkthrough for each system, including how to open a terminal, is
+in **[INSTALL_Python.md](INSTALL_Python.md)**. If InCenter still uses the
+built-in engine, see [Troubleshooting](#troubleshooting).
 
 To use one engine on purpose, set `FORCE_ENGINE` near the top of
 `BudashAudio_InCenter.lua` to `"python"` or `"eel"` (the default `nil`
@@ -215,7 +233,7 @@ it on the item carrying your video: that item would lose its picture.
 - **Nothing happens / REAPER seems frozen:** first check you loaded
   `BudashAudio_InCenter.lua`, **not** `incenter.py` (the most common
   mistake).
-- **"Engine: built-in" but you have Python:** InCenter only uses a Python
+- **Align is greyed out ("built-in engine") but you have Python:** InCenter only uses a Python
   that has numpy installed, and auto-detection only checks the usual
   install locations. If yours is missing numpy, see
   [INSTALL_Python.md](INSTALL_Python.md). If it's a pyenv, conda, or other
@@ -294,8 +312,9 @@ busted tests/lua --lpath="tests/lua/?.lua"
   InCenter falls back to a built-in engine (ReaImGui 0.8.5+). It has no
   Align, always writes 32-bit float, is slower (roughly 4x realtime: about
   21 s for a 1:20 file, versus about 4 s with Python) and skips items whose
-  playback rate isn't 1.0. With Python nothing changes. The panel shows the
-  active engine; new `FORCE_ENGINE` setting to pick one manually.
+  playback rate isn't 1.0. With Python nothing changes. Align is greyed out
+  with a note on the built-in engine; new `FORCE_ENGINE` setting to pick one
+  manually.
 - **0.9.0**: First public release. Per-band attack/tail centering,
   GCC-PHAT alignment on the loudest region, auto window selection, and
   item-region processing (a trimmed item is measured and corrected using
