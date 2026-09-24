@@ -1,8 +1,9 @@
 -- @description InCenter - stereo re-centering for field recordings and designed sound
--- @version 0.9.0
+-- @version 0.10.0
 -- @author Budash Audio
 -- @provides
 --   incenter_core.lua
+--   incenter_eel.lua
 --   incenter.py
 --   ../INSTALL_Python.md > INSTALL_Python.md
 -- @about
@@ -10,12 +11,19 @@
 --   Free, in-REAPER stereo re-centering for material whose stereo image
 --   is pulled to one side - portable-recorder field captures, or
 --   designed stereo assets (whooshes, blips, textures) built without
---   watching the stereo base. See README.md for details. Requires the
---   bundled incenter_core.lua + incenter.py and a system Python 3 with
---   numpy.
+--   watching the stereo base. See README.md for details. Uses a system
+--   Python 3 with numpy when one is found (faster, and adds Align);
+--   otherwise falls back to a built-in engine that needs only ReaImGui
+--   0.8.5 or newer.
+-- @changelog
+--   0.10.0: Runs without Python. When no Python 3 with numpy is found,
+--   InCenter falls back to a built-in engine (needs ReaImGui 0.8.5+). The
+--   built-in engine has no Align, always writes 32-bit float, and is
+--   slower (roughly 4x realtime). With Python installed nothing changes.
+--   The panel shows which engine is active.
 -- @link https://github.com/budashaudio/InCenter
 
--- BudashAudio_InCenter.lua - InCenter control panel  [v0.9.0]
+-- BudashAudio_InCenter.lua - InCenter control panel  [v0.10.0]
 --
 -- SPDX-License-Identifier: MIT
 -- Copyright (c) 2026 Budash Audio
@@ -29,6 +37,11 @@
 -- If auto-detection can't find your python3 (the one with numpy),
 -- set its full path here, e.g. "/usr/local/bin/python3".
 local PYTHON_OVERRIDE = ""
+
+-- Which DSP engine to use. nil = automatic: Python if a Python 3 with numpy
+-- is found, otherwise the built-in engine. Set "python" or "eel" to force
+-- one (e.g. "eel" to try the built-in engine without uninstalling Python).
+local FORCE_ENGINE = nil
 -- ----------------------------------------------------------------------
 
 -- Prefer APIExists over touching the field directly (cleaner check that a
@@ -61,6 +74,24 @@ local script_path = select(2, reaper.get_action_context())
 local script_dir = script_path:match("^(.*)[/\\]") or "."
 
 local core = dofile(script_dir .. "/incenter_core.lua")
+
+-- Pick the DSP engine once, at startup: the status line and the Align
+-- checkbox both depend on it. find_python's ExtState cache keeps this
+-- cheap after the first successful run.
+local selection, selection_err = core.select_engine{
+  force = FORCE_ENGINE,
+  python_override = PYTHON_OVERRIDE,
+  has_eel_api = has_api('ImGui_CreateFunctionFromEEL'),
+}
+if not selection then
+  reaper.MB(selection_err, "InCenter", 0)
+  return
+end
+local engine = selection.engine
+local eel = nil
+if engine == "eel" then
+  eel = dofile(script_dir .. "/incenter_eel.lua")
+end
 
 -- Pin the ReaImGui API version this script was written against, via the
 -- ReaTeam shim if present. Without this, a future ReaImGui that changes or
@@ -129,16 +160,20 @@ local function set_status(lines) status_lines = lines end
 -- The actual (blocking) work. Kept separate so the UI can paint a
 -- "Processing..." status one frame *before* this runs - see request_process.
 local function do_process()
-  local dsp = script_dir .. "/incenter.py"
-  if not core.file_exists(dsp) then
-    set_status({ "ERROR: incenter.py not found next to this script:", dsp })
-    return
-  end
+  local dsp, python = nil, nil
+  if engine == "python" then
+    dsp = script_dir .. "/incenter.py"
+    if not core.file_exists(dsp) then
+      set_status({ "ERROR: incenter.py not found next to this script:", dsp })
+      return
+    end
 
-  local python, python_err = core.find_python(PYTHON_OVERRIDE)
-  if not python then
-    set_status({ "ERROR: no usable Python 3 found.", python_err or "" })
-    return
+    local python_err
+    python, python_err = core.find_python(PYTHON_OVERRIDE)
+    if not python then
+      set_status({ "ERROR: no usable Python 3 found.", python_err or "" })
+      return
+    end
   end
 
   local n_sel = reaper.CountSelectedMediaItems(0)
@@ -156,6 +191,7 @@ local function do_process()
   for i = 0, n_sel - 1 do
     local item = reaper.GetSelectedMediaItem(0, i)
     local take, path, err = core.validate_item(item)
+    if take and eel then err = eel.check_take(take) end
     if err then
       table.insert(skip_lines, "skip: " .. err)
     else
@@ -163,7 +199,10 @@ local function do_process()
       local job_key = core.make_job_key(path, start_sec, length_sec)
       table.insert(candidates, { item = item, take = take, path = path,
                                  job_key = job_key })
-      jobs[job_key] = { src_path = path, start_sec = start_sec, length_sec = length_sec }
+      -- `take` is only read by the built-in engine (the audio accessor
+      -- reads a take, not a file); the Python runner ignores it.
+      jobs[job_key] = { src_path = path, start_sec = start_sec, length_sec = length_sec,
+                        take = take }
     end
   end
 
@@ -184,7 +223,12 @@ local function do_process()
     collapse = collapse,
     align = align, win = WIN_VALUES[win_idx + 1] or "auto", verbose = false,
   }
-  local ok_map, err_map, _output, diag_map = core.run_batch(python, dsp, jobs, opts, out_dir)
+  local ok_map, err_map, _output, diag_map
+  if eel then
+    ok_map, err_map, _output, diag_map = eel.run_batch(core, jobs, opts, out_dir)
+  else
+    ok_map, err_map, _output, diag_map = core.run_batch(python, dsp, jobs, opts, out_dir)
+  end
   diag_map = diag_map or {}
 
   reaper.Undo_BeginBlock()
@@ -243,7 +287,9 @@ end
 -- staring at a dead window.
 local process_pending = false
 local function request_process()
-  set_status({ "Processing... (the window may freeze briefly)" })
+  set_status({ eel
+    and "Processing with the built-in engine... (the window will freeze; expect roughly 15 seconds per minute of audio)"
+    or "Processing... (the window may freeze briefly)" })
   process_pending = true
 end
 
@@ -333,6 +379,15 @@ end
 
 local function section_header(text) colored_text(text, COL_HEADER) end
 
+-- One informational line saying which engine is running - the first thing
+-- to ask a user who reports a problem. Not a control.
+local function engine_label()
+  if engine == "python" then
+    return "Engine: Python" .. (selection.forced and " (forced)" or "")
+  end
+  return "Engine: built-in (slower, no Align)" .. (selection.forced and " (forced)" or "")
+end
+
 local function draw_footer()
   reaper.ImGui_Dummy(ctx, 0, 2)
   colored_text("Budash Audio  -  v" .. core.VERSION, COL_MUTED)
@@ -417,6 +472,13 @@ local function loop()
       reaper.ImGui_EndPopup(ctx)
     end
 
+    colored_text(engine_label(), COL_MUTED)
+    if engine == "eel" and not selection.forced then
+      colored_text("No Python 3 with numpy found. Installing it makes " ..
+        "processing faster and enables Align (see INSTALL_Python.md).", COL_MUTED)
+    end
+
+    reaper.ImGui_Spacing(ctx)
     section_header("ATTACK CORRECTION")
     changed, strength = reaper.ImGui_SliderDouble(ctx, "##attack", strength, 0.0, 1.0, "%.2f")
     if changed then save_settings() end
@@ -436,10 +498,20 @@ local function loop()
     if changed then save_settings() end
 
     reaper.ImGui_Spacing(ctx)
-    reaper.ImGui_PushStyleColor(ctx, reaper.ImGui_Col_Text(), COL_ITEM_TEXT)
-    changed, align = reaper.ImGui_Checkbox(ctx, "Align (fixes a tiny left/right timing offset)", align)
-    reaper.ImGui_PopStyleColor(ctx)
-    if changed then save_settings() end
+    if eel then
+      -- Align isn't in the built-in engine. Drawn greyed out and unchecked,
+      -- never clickable; the saved setting is left alone so it still
+      -- applies when the Python engine is used again.
+      reaper.ImGui_BeginDisabled(ctx)
+      reaper.ImGui_Checkbox(ctx, "Align (fixes a tiny left/right timing offset)", false)
+      reaper.ImGui_EndDisabled(ctx)
+      colored_text("Not available in the built-in engine.", COL_LABEL)
+    else
+      reaper.ImGui_PushStyleColor(ctx, reaper.ImGui_Col_Text(), COL_ITEM_TEXT)
+      changed, align = reaper.ImGui_Checkbox(ctx, "Align (fixes a tiny left/right timing offset)", align)
+      reaper.ImGui_PopStyleColor(ctx)
+      if changed then save_settings() end
+    end
 
     reaper.ImGui_Spacing(ctx)
     section_header("STEREO WIDTH  (0 = leave the image as wide as it is)")
@@ -448,9 +520,12 @@ local function loop()
     reaper.ImGui_SameLine(ctx)
     colored_text(collapse >= 1.0 and "Mono" or "Narrow", COL_LABEL)
 
-    if collapse > 0.0 and not align then
+    if collapse > 0.0 and (eel or not align) then
       reaper.ImGui_PushStyleColor(ctx, reaper.ImGui_Col_Text(), COL_WARN)
-      reaper.ImGui_TextWrapped(ctx,
+      reaper.ImGui_TextWrapped(ctx, eel and
+        "Narrowing can comb-filter if the channels are time-offset " ..
+        "(spaced mics, AB). The built-in engine has no Align to " ..
+        "correct that; it's fine for coincident mics (XY, MS)." or
         "Narrowing without Align can comb-filter if the channels are " ..
         "time-offset. Turn Align on for spaced mics (AB); leave it off " ..
         "for coincident ones (XY, MS).")

@@ -3,7 +3,7 @@
 A free tool that re-centers a stereo image that's pulled to one side. It
 runs entirely inside your own REAPER session.
 
-*by [Budash Audio](https://budashaudio.com) · v0.9.0 · MIT-licensed*
+*by [Budash Audio](https://budashaudio.com) · v0.10.0 · MIT-licensed*
 
 <img src="docs/inCenter_promo_gif.gif" alt="Goniometer A/B comparison: a stereo image pulled off-axis to one side, then rotated back to center by InCenter with its stereo width unchanged">
 
@@ -45,12 +45,16 @@ the fix.
 ## Install
 
 Requires the **ReaImGui** extension (Extensions -> ReaPack -> Browse
-packages -> search "ReaImGui") and a system **Python 3** with `numpy`.
-If you don't already have Python set up, follow
-**[INSTALL_Python.md](INSTALL_Python.md)** first, a plain, step-by-step
-guide (no Python knowledge needed) for macOS, Windows and Linux.
-InCenter auto-detects the interpreter: it actually tries `import numpy`
-in each candidate, so it won't pick a Python that's missing the library.
+packages -> search "ReaImGui"), version 0.8.5 or newer.
+
+A system **Python 3** with `numpy` is optional but recommended: it is
+faster and it enables Align. If you'd like it and don't already have
+Python set up, follow **[INSTALL_Python.md](INSTALL_Python.md)**, a plain,
+step-by-step guide (no Python knowledge needed) for macOS, Windows and
+Linux. InCenter auto-detects the interpreter: it actually tries
+`import numpy` in each candidate, so it won't pick a Python that's
+missing the library. Without one, InCenter runs its built-in engine
+instead, see [Running without Python](#running-without-python).
 
 **Via ReaPack** (recommended): Extensions -> ReaPack -> Import
 repositories..., paste this URL, then OK:
@@ -74,13 +78,14 @@ then handles updates automatically.
    and pick `BudashAudio_InCenter.lua`, inside the `Budash Audio` folder
    (the control panel, and the only file here you load directly).
 
-**Do not load `incenter.py` or `incenter_core.lua` as REAPER actions.**
-They're dependencies: `incenter_core.lua` is the
+**Do not load `incenter.py`, `incenter_core.lua` or `incenter_eel.lua` as
+REAPER actions.** They're dependencies: `incenter_core.lua` is the
 REAPER-side mechanics the panel calls into (process runner, source-swap,
-Python finder), and `incenter.py` is the DSP engine, meant to run only
-as a subprocess with CLI arguments. Loading `incenter.py` directly runs
+Python finder, engine selection), `incenter.py` is the Python DSP engine,
+meant to run only as a subprocess with CLI arguments, and
+`incenter_eel.lua` is the built-in fallback engine. Loading `incenter.py` directly runs
 it under REAPER's own embedded Python, which can't import numpy and may
-hang REAPER. Both carry an `@noindex` tag so ReaPack won't list them as
+hang REAPER. All three carry an `@noindex` tag so ReaPack won't list them as
 separate actions.
 
 ## Use
@@ -99,10 +104,40 @@ Select one or more stereo WAV items, open the InCenter panel, and set:
 - **Width only (skip centering)**: applies stereo width reduction
   without re-centering, for when you only want the narrowing.
 
-Press **Process selected item(s)**. Each item's take is repointed at a
+The panel shows which engine is active (**Engine: Python** or
+**Engine: built-in**). Press **Process selected item(s)**. Each item's take is repointed at a
 corrected file named `<name>_centered_<HHMMSS>.wav`, written to the
 project's media folder (or next to the source if the project isn't saved).
 The original source audio is never overwritten.
+
+## Running without Python
+
+InCenter picks its engine by itself; there is nothing to choose. If it
+finds a Python 3 with `numpy`, it uses that, exactly as before. If not, it
+falls back to a built-in engine that runs inside REAPER and needs only
+ReaImGui 0.8.5 or newer. The panel says which one is running.
+
+The built-in engine is a fallback, not a replacement. Differences from the
+Python engine:
+
+- **No Align.** The checkbox is greyed out. Spaced-mic (AB) material with a
+  timing offset between the channels can't be corrected for it here.
+- **Always writes 32-bit float,** whatever the source's bit depth.
+- **Slower:** roughly 4x realtime, about 21 seconds for a 1:20 file,
+  against about 4 seconds with Python. The panel freezes while it works,
+  as it does with Python.
+- **Items at a playback rate other than 1.0 are skipped** with a message
+  (the Python engine keeps the rate). Set the rate to 1.0 or glue first.
+- Same as with Python: WAV sources only, stereo only, reversed and glued
+  (SECTION) takes are skipped with a message, output goes to the same
+  place with the same names, and one Undo step covers a whole run.
+
+Results from the two engines are not byte-identical. They implement the
+same algorithm, and Align is the only intended difference in what they do.
+
+To use one engine on purpose, set `FORCE_ENGINE` near the top of
+`BudashAudio_InCenter.lua` to `"python"` or `"eel"` (the default `nil`
+means automatic).
 
 ## What it does
 
@@ -180,12 +215,16 @@ it on the item carrying your video: that item would lose its picture.
 - **Nothing happens / REAPER seems frozen:** first check you loaded
   `BudashAudio_InCenter.lua`, **not** `incenter.py` (the most common
   mistake).
-- **"No Python 3 found":** if you don't have a Python 3 with numpy
-  anywhere yet, install one: see [INSTALL_Python.md](INSTALL_Python.md).
-  If you already do (a pyenv, conda, or other custom-prefix install) but
-  InCenter still isn't finding it, that's because auto-detection only
-  checks the usual install locations. Set `PYTHON_OVERRIDE` near the
-  top of `BudashAudio_InCenter.lua` to its full path instead.
+- **"Engine: built-in" but you have Python:** InCenter only uses a Python
+  that has numpy installed, and auto-detection only checks the usual
+  install locations. If yours is missing numpy, see
+  [INSTALL_Python.md](INSTALL_Python.md). If it's a pyenv, conda, or other
+  custom-prefix install, set `PYTHON_OVERRIDE` near the top of
+  `BudashAudio_InCenter.lua` to its full path.
+- **"No usable Python 3 found" / "InCenter needs one of these":** you set
+  `FORCE_ENGINE = "python"` with no Python available, or neither engine
+  can run. Install Python (see [INSTALL_Python.md](INSTALL_Python.md)) or
+  update ReaImGui to 0.8.5 or newer.
 - **The panel freezes while processing:** this is expected. `ExecProcess`
   blocks the main thread until the worker exits. Batching every selected item
   into one process launch keeps it as short as possible, but it isn't
@@ -225,8 +264,10 @@ A few non-obvious decisions, in case you're reading the source:
 ## Running the tests
 
 `tests/test_incenter.py` covers the Python DSP engine (`pytest`);
-`tests/lua/incenter_core_spec.lua` covers the Lua core against a
-fake `reaper` API (`busted`). These are developer-only checks, separate
+`tests/lua/incenter_core_spec.lua` and `tests/lua/engine_select_spec.lua`
+cover the Lua core (including engine selection) against a fake `reaper`
+API (`busted`). The built-in EEL engine's DSP can't run outside REAPER, so
+it isn't covered by either suite. These are developer-only checks, separate
 from the runtime requirements above.
 
 ```
@@ -242,13 +283,19 @@ busted tests/lua --lpath="tests/lua/?.lua"
 ## Requirements
 
 - REAPER (developed on the portable macOS build, Apple Silicon)
-- ReaImGui: for the control panel only
-- Python 3 with `numpy`
+- ReaImGui 0.8.5 or newer
+- Python 3 with `numpy`: optional, recommended for speed and Align
 - Stereo WAV sources (24-bit/48 kHz is the primary target; other stereo
   WAVs work too)
 
 ## Changelog
 
+- **0.10.0**: Runs without Python. With no Python 3 + numpy found,
+  InCenter falls back to a built-in engine (ReaImGui 0.8.5+). It has no
+  Align, always writes 32-bit float, is slower (roughly 4x realtime: about
+  21 s for a 1:20 file, versus about 4 s with Python) and skips items whose
+  playback rate isn't 1.0. With Python nothing changes. The panel shows the
+  active engine; new `FORCE_ENGINE` setting to pick one manually.
 - **0.9.0**: First public release. Per-band attack/tail centering,
   GCC-PHAT alignment on the loudest region, auto window selection, and
   item-region processing (a trimmed item is measured and corrected using

@@ -1,4 +1,4 @@
--- incenter_core.lua - shared core for InCenter  [v0.9.0]
+-- incenter_core.lua - shared core for InCenter  [v0.10.0]
 -- @noindex
 --
 -- InCenter - stereo re-centering for field recordings and designed sound
@@ -17,7 +17,7 @@
 
 local core = {}
 
-core.VERSION = "0.9.0"
+core.VERSION = "0.10.0"
 
 -- Platform detection. reaper.GetOS() returns strings like "OSX64",
 -- "macOS-arm64", "Win64", "Win32", "Other" (Linux). We only need to know
@@ -209,6 +209,59 @@ end
 -- attempt re-scans instead of reusing a path that may have broken).
 function core.clear_python_cache()
   reaper.DeleteExtState(EXT_SECTION, "python_path", true)
+end
+
+-- ---- engine selection -------------------------------------------------
+
+-- Which DSP engine runs: the Python one (incenter.py, primary: faster, has
+-- Align) or the built-in EEL one (incenter_eel.lua, the fallback for
+-- machines without Python). Pure decision logic, no UI, so it is unit-tested
+-- without REAPER. cfg:
+--   force            : nil (auto), "python" or "eel" (the panel's FORCE_ENGINE)
+--   python_override  : the panel's PYTHON_OVERRIDE, passed to find_python
+--   has_eel_api      : true when reaper.ImGui_CreateFunctionFromEEL exists
+--                      (ReaImGui >= 0.8.5); the caller checks, so this
+--                      stays testable
+-- Returns { engine = "python"|"eel", python = path, forced = bool,
+-- python_error = msg } on success (python only set for the Python engine;
+-- python_error only for an auto-selected EEL fallback, saying why Python
+-- was passed over), or nil, message when no usable engine exists.
+local EEL_API_MISSING =
+  "The built-in engine needs ReaImGui 0.8.5 or newer.\n\n" ..
+  "Update it via Extensions -> ReaPack -> Browse packages, search for " ..
+  "'ReaImGui', install the update, then restart REAPER."
+
+function core.select_engine(cfg)
+  cfg = cfg or {}
+  local force = cfg.force
+  if force == "" then force = nil end
+  if force ~= nil and force ~= "python" and force ~= "eel" then
+    return nil, 'FORCE_ENGINE must be nil, "python" or "eel" (got "' ..
+      tostring(force) .. '").'
+  end
+
+  if force == "eel" then
+    if not cfg.has_eel_api then return nil, EEL_API_MISSING end
+    return { engine = "eel", forced = true }
+  end
+
+  local python, python_err = core.find_python(cfg.python_override)
+  if python then
+    return { engine = "python", python = python, forced = (force == "python") }
+  end
+  if force == "python" then return nil, python_err end
+
+  if cfg.has_eel_api then
+    return { engine = "eel", forced = false, python_error = python_err }
+  end
+  return nil,
+    "InCenter needs one of these to run:\n\n" ..
+    "1. Python 3 with numpy (recommended: faster, and it enables Align). " ..
+    "See INSTALL_Python.md.\n" ..
+    "2. ReaImGui 0.8.5 or newer, which enables the built-in engine with " ..
+    "no Python needed (Extensions -> ReaPack -> Browse packages -> " ..
+    "ReaImGui, update, restart REAPER).\n\n" ..
+    (python_err or "")
 end
 
 -- ---- peak building ---------------------------------------------------
