@@ -1,8 +1,10 @@
 # Installing Python for InCenter: step by step
 
-InCenter does its audio processing in a small Python program. That means
-your Mac or PC needs **Python 3** with one free add-on library, **NumPy**.
-You only do this once. After that InCenter finds it automatically and you
+InCenter can do its audio processing in a small Python program, which is
+faster and enables the Align option. (Without Python it still works, using
+a slower built-in engine; this guide is optional.) For the Python engine
+your Mac or PC needs **Python 3** with one free add-on library,
+**NumPy**. You only do this once. After that InCenter finds it automatically and you
 never think about it again.
 
 You do **not** need to know anything about Python. Just follow the steps
