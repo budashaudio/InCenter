@@ -488,9 +488,8 @@ local function loop()
       -- never clickable; the saved setting is left alone so it still
       -- applies when the Python engine is used again.
       reaper.ImGui_BeginDisabled(ctx)
-      reaper.ImGui_Checkbox(ctx, "Align (fixes a tiny left/right timing offset)", false)
+      reaper.ImGui_Checkbox(ctx, "Align (Not available in the built-in engine. See README)", false)
       reaper.ImGui_EndDisabled(ctx)
-      colored_text("Not available in the built-in engine. See README.", COL_LABEL)
     else
       reaper.ImGui_PushStyleColor(ctx, reaper.ImGui_Col_Text(), COL_ITEM_TEXT)
       changed, align = reaper.ImGui_Checkbox(ctx, "Align (fixes a tiny left/right timing offset)", align)

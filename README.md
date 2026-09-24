@@ -115,9 +115,9 @@ InCenter picks its engine by itself; there is nothing to choose. If it
 finds a Python 3 with `numpy`, it uses that, exactly as before. If not, it
 falls back to a built-in engine that runs inside REAPER and needs only
 ReaImGui 0.8.5 or newer. To tell which one is running, look at the Align
-checkbox: if it is greyed out with the note "Not available in the built-in
-engine. See README.", the built-in engine is active; if you can tick it,
-Python is.
+checkbox: if it is greyed out and its label reads "Align (Not available in
+the built-in engine. See README)", the built-in engine is active; if you can
+tick it, Python is.
 
 The built-in engine is a fallback, not a replacement. Differences from the
 Python engine:
